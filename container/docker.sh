@@ -43,6 +43,20 @@ repo_of() {
   esac
 }
 
+# BuildKit 的缓存参数：只支持 type=registry,ref=<repo>（映射到 kaniko --cache-repo）。
+# type=gha/local 在本平台无法实现；明确告警并禁用缓存，不静默换成别的缓存。
+handle_cache_arg() {
+  v=$1
+  case "$v" in
+    *type=registry*)
+      case "$v" in
+        *ref=*) r=${v#*ref=}; r=${r%%,*}; GRC_CACHE_REPO=$(repo_of "$r") ;;
+        *)      GRC_CACHE_UNSUPPORTED=1; log "缓存参数缺少 ref，已忽略：$v" ;;
+      esac ;;
+    *) GRC_CACHE_UNSUPPORTED=1; log "缓存参数 $v 本平台不支持（仅 type=registry 可映射），本次不启用缓存" ;;
+  esac
+}
+
 # 过滤 kaniko 的 info 内部流水：只留 Dockerfile 指令头、RUN 输出（不走 logrus）、
 # 缓存命中情况和告警/错误。RUN 命令的 stdout/stderr 是直接继承的，没有 INFO 前缀。
 filter_log() {
@@ -69,6 +83,7 @@ filter_log() {
 parse_build() {
   GRC_TAGS=""; GRC_FILE=""; GRC_CTX=""; GRC_ARGS=""; GRC_TARGET=""; GRC_PLATFORM=""
   GRC_PUSH=0; GRC_IGNORED=""; GRC_IID=""; GRC_META=""; GRC_LABELS=""
+  GRC_NOCACHE=0; GRC_CACHE_REPO=""; GRC_CACHE_UNSUPPORTED=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -t|--tag)     GRC_TAGS="$GRC_TAGS $2"; shift 2 ;;
@@ -85,7 +100,8 @@ parse_build() {
       --iidfile=*)      GRC_IID=${1#*=}; shift ;;
       --metadata-file=*) GRC_META=${1#*=}; shift ;;
       --label=*)       GRC_LABELS="$GRC_LABELS ${1#*=}"; shift ;;
-      --cache-from=*|--cache-to=*|--secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--progress=*)
+      --cache-from=*|--cache-to=*) handle_cache_arg "${1#*=}"; shift ;;
+      --secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--progress=*)
                        GRC_IGNORED="$GRC_IGNORED ${1%%=*}"; shift ;;
       # 构建证明类参数（官方 build-push-action 默认会带 --attest）：kaniko 做不到，静默忽略。
       # 它们都带值，必须连值一起吃掉 —— 否则 `--attest type=provenance,…` 的值会被当成 context。
@@ -96,10 +112,12 @@ parse_build() {
       --metadata-file) GRC_META=$2; shift 2 ;;
       --attest|--provenance|--sbom) shift 2 ;;
       --label)      GRC_LABELS="$GRC_LABELS $2"; shift 2 ;;
-      --cache-from|--cache-to|--secret|--ssh|--output|-o|--builder|--network|--shm-size)
+      --cache-from|--cache-to) handle_cache_arg "$2"; shift 2 ;;
+      --secret|--ssh|--output|-o|--builder|--network|--shm-size)
                     GRC_IGNORED="$GRC_IGNORED $1"; shift 2 ;;
       # —— 布尔、无对应物的参数 ——
-      --progress|--no-cache|--pull|--quiet|-q|--load|--compress)
+      --no-cache)   GRC_NOCACHE=1; shift ;;
+      --progress|--pull|--quiet|-q|--load|--compress)
                     GRC_IGNORED="$GRC_IGNORED $1"; shift ;;
       --)           shift; [ $# -gt 0 ] && GRC_CTX=$1 && shift ;;
       -*)           GRC_IGNORED="$GRC_IGNORED $1"; shift ;;
@@ -114,7 +132,7 @@ parse_build() {
   case "$GRC_PLATFORM" in
     *,*) die "多平台构建（--platform=$GRC_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台（多平台需要 binfmt/QEMU 模拟，本集群安全基线不允许特权）" ;;
   esac
-  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "$GRC_ARGS" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" "$GRC_LABELS" > "$SPEC"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "$GRC_ARGS" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" "$GRC_LABELS" "$GRC_NOCACHE" "$GRC_CACHE_REPO" "$GRC_CACHE_UNSUPPORTED" > "$SPEC"
 }
 
 # 把一次构建（GRC_* + GRC_DEST）交给 kaniko 容器，并把它的输出流回来
@@ -151,10 +169,14 @@ submit() {
       seen="$seen $h"
       printf '%s\n' "--insecure-registry=$h" >> "$dir/args"
     done
-    # kaniko 原生层缓存（不是 BuildKit 的 --cache-from）：缓存层推到 <目标仓库>/cache，
-    # 命中后跳过未变化的层。典型收益：go.mod/go.sum 没变时 RUN go mod download 直接复用。
-    cache_repo=$(repo_of "$(printf '%s\n' "$GRC_DEST" | awk '{print $1; exit}')")
-    printf '%s\n' "--cache=true" "--cache-repo=$cache_repo/cache" >> "$dir/args"
+    # 缓存策略：workflow 显式 --no-cache 或用了本平台不支持的缓存类型 → 不缓存；
+    # workflow 指定 type=registry,ref=... → 用它的仓库；都没说 → 默认 <目标仓库>/cache
+    # （等价于持久化 docker daemon 的本地层缓存，让标准 workflow 不必写缓存配置）。
+    if [ "$GRC_NOCACHE" = 0 ] && [ "$GRC_CACHE_UNSUPPORTED" = 0 ]; then
+      cache_repo=$GRC_CACHE_REPO
+      [ -n "$cache_repo" ] || cache_repo="$(repo_of "$(printf '%s\n' "$GRC_DEST" | awk '{print $1; exit}')")/cache"
+      printf '%s\n' "--cache=true" "--cache-repo=$cache_repo" >> "$dir/args"
+    fi
   else
     printf '%s\n' "--no-push" >> "$dir/args"
   fi
@@ -265,7 +287,7 @@ case "$cmd" in
   push)
     ref=${1:-}; [ -n "$ref" ] || die "push 需要镜像名：docker push <ref>"
     [ -f "$SPEC" ] || die "没有可推送的镜像：本平台没有本地镜像库，push 只能跟在同一个 job 里的 build 之后"
-    { read -r GRC_CTX <&3; read -r GRC_FILE <&3; read -r GRC_ARGS <&3; read -r GRC_TARGET <&3; read -r GRC_PLATFORM <&3; read -r GRC_TAGS <&3; read -r GRC_LABELS <&3; } 3< "$SPEC" || true
+    { read -r GRC_CTX <&3; read -r GRC_FILE <&3; read -r GRC_ARGS <&3; read -r GRC_TARGET <&3; read -r GRC_PLATFORM <&3; read -r GRC_TAGS <&3; read -r GRC_LABELS <&3; read -r GRC_NOCACHE <&3; read -r GRC_CACHE_REPO <&3; read -r GRC_CACHE_UNSUPPORTED <&3; } 3< "$SPEC" || true
     # 如果 ref 是上次 build 的某个 tag，就把那批 tag 一起推掉（kaniko 一次可推多个 destination）
     case " ${GRC_TAGS:-} " in
       *" $ref "*) GRC_DEST="$GRC_TAGS" ;;
