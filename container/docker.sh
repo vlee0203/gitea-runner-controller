@@ -169,13 +169,10 @@ submit() {
       seen="$seen $h"
       printf '%s\n' "--insecure-registry=$h" >> "$dir/args"
     done
-    # 缓存策略：workflow 显式 --no-cache 或用了本平台不支持的缓存类型 → 不缓存；
-    # workflow 指定 type=registry,ref=... → 用它的仓库；都没说 → 默认 <目标仓库>/cache
-    # （等价于持久化 docker daemon 的本地层缓存，让标准 workflow 不必写缓存配置）。
-    if [ "$GRC_NOCACHE" = 0 ] && [ "$GRC_CACHE_UNSUPPORTED" = 0 ]; then
-      cache_repo=$GRC_CACHE_REPO
-      [ -n "$cache_repo" ] || cache_repo="$(repo_of "$(printf '%s\n' "$GRC_DEST" | awk '{print $1; exit}')")/cache"
-      printf '%s\n' "--cache=true" "--cache-repo=$cache_repo" >> "$dir/args"
+    # 缓存只由 workflow 显式开启：cache-from/cache-to 里的 type=registry,ref=... 映射到
+    # --cache-repo（kaniko 只有一个缓存仓库，读写共用）。什么都没写 → 不缓存。
+    if [ "$GRC_NOCACHE" = 0 ] && [ "$GRC_CACHE_UNSUPPORTED" = 0 ] && [ -n "$GRC_CACHE_REPO" ]; then
+      printf '%s\n' "--cache=true" "--cache-repo=$GRC_CACHE_REPO" >> "$dir/args"
     fi
   else
     printf '%s\n' "--no-push" >> "$dir/args"
