@@ -64,9 +64,6 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 显式开启层缓存（平台默认关闭）；ref 换成别的仓库也可以
-          cache-from: type=registry,ref=${{ secrets.REGISTRY }}/${{ github.repository }}/controller/cache:latest
-          cache-to: type=registry,ref=${{ secrets.REGISTRY }}/${{ github.repository }}/controller/cache:latest,mode=max
 
   runner:
     runs-on: ubuntu-latest
@@ -96,5 +93,3 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ secrets.REGISTRY }}/${{ github.repository }}/runner/cache:latest
-          cache-to: type=registry,ref=${{ secrets.REGISTRY }}/${{ github.repository }}/runner/cache:latest,mode=max
