@@ -32,6 +32,39 @@ strip_scheme() {
   esac
 }
 
+# 从镜像引用里取出仓库路径（去掉 scheme/tag/digest），kaniko 的 --cache-repo 用
+repo_of() {
+  ref=${1#*://}
+  ref=${ref%%@*}
+  case "$ref" in
+    */*) printf '%s/%s' "${ref%/*}" "$(printf '%s' "${ref##*/}" | cut -d: -f1)" ;;
+    *:*) printf '%s' "${ref%%:*}" ;;
+    *)   printf '%s' "$ref" ;;
+  esac
+}
+
+# 过滤 kaniko 的 info 内部流水：只留 Dockerfile 指令头、RUN 输出（不走 logrus）、
+# 缓存命中情况和告警/错误。RUN 命令的 stdout/stderr 是直接继承的，没有 INFO 前缀。
+filter_log() {
+  awk '
+    /^INFO\[[^]]*\] / {
+      msg = $0
+      sub(/^INFO\[[^]]*\] /, "", msg)
+      if (msg == "Found cached layer") { print "[cache] hit"; next }
+      if (msg ~ /^No cached layer found for cmd /) {
+        sub(/^No cached layer found for cmd /, "", msg)
+        print "[cache] miss: " msg
+        next
+      }
+      if (msg ~ /^(RUN|COPY|ADD|WORKDIR|ARG|ENV|LABEL|FROM|ENTRYPOINT|CMD|HEALTHCHECK|USER|EXPOSE|VOLUME|SHELL|STOPSIGNAL|ONBUILD)( |$)/) {
+        print ">>> " msg
+      }
+      next
+    }
+    { print }
+  '
+}
+
 # 解析 build 的参数（$@ = build 之后的所有参数），结果放进 GRC_* 变量
 parse_build() {
   GRC_TAGS=""; GRC_FILE=""; GRC_CTX=""; GRC_ARGS=""; GRC_TARGET=""; GRC_PLATFORM=""
@@ -118,11 +151,16 @@ submit() {
       seen="$seen $h"
       printf '%s\n' "--insecure-registry=$h" >> "$dir/args"
     done
+    # kaniko 原生层缓存（不是 BuildKit 的 --cache-from）：缓存层推到 <目标仓库>/cache，
+    # 命中后跳过未变化的层。典型收益：go.mod/go.sum 没变时 RUN go mod download 直接复用。
+    cache_repo=$(repo_of "$(printf '%s\n' "$GRC_DEST" | awk '{print $1; exit}')")
+    printf '%s\n' "--cache=true" "--cache-repo=$cache_repo/cache" >> "$dir/args"
   else
     printf '%s\n' "--no-push" >> "$dir/args"
   fi
-  # warn：只留构建步骤的输出与错误，kaniko 的内部流水不进 job 日志；摘要走 --digest-file
-  printf '%s\n' "--verbosity=warn" >> "$dir/args"
+  # info：kaniko 的构建步骤和 RUN 输出都在这一级（RUN 输出直接走 stdout，没有前缀）；
+  # 内部流水由 filter_log 过滤，只留 >>> 指令头、RUN 输出、[cache] 和告警/错误。
+  printf '%s\n' "--verbosity=info" >> "$dir/args"
   printf '%s\n' "--digest-file" "$dir/digest" >> "$dir/args"
   : > "$dir/env"
   for pair in "HTTP_PROXY:${HTTP_PROXY:-}" "http_proxy:${http_proxy:-}" "HTTPS_PROXY:${HTTPS_PROXY:-}" "https_proxy:${https_proxy:-}"; do
@@ -143,17 +181,23 @@ submit() {
   : > "$dir/go"                       # 准备就绪，kaniko 容器可以开工
   log "构建交给同 Pod 的 kaniko 容器"
 
-  # 边等边把它的输出流到 job 日志（只追加，不重打）
+  # 边等边把它的输出过滤后流到 job 日志（只追加，不重打；只输出完整行，
+  # 末尾没有换行的那一行在 done 之后补一次）
   seen=0
+  stream_log() {
+    [ -f "$dir/log" ] || return 0
+    total=$(wc -l < "$dir/log" 2>/dev/null || echo 0)
+    [ "$total" -gt "$seen" ] || return 0
+    tail -n +$((seen + 1)) "$dir/log" | head -n $((total - seen)) | filter_log
+    seen=$total
+  }
   while [ ! -f "$dir/done" ]; do
-    if [ -f "$dir/log" ]; then
-      n=$(wc -c < "$dir/log")
-      if [ "$n" -gt "$seen" ]; then tail -c +$((seen + 1)) "$dir/log"; seen=$n; fi
-    fi
+    stream_log
     sleep 1
   done
-  if [ -f "$dir/log" ]; then
-    n=$(wc -c < "$dir/log"); [ "$n" -gt "$seen" ] && tail -c +$((seen + 1)) "$dir/log"
+  stream_log
+  if [ -f "$dir/log" ] && [ "$(tail -c 1 "$dir/log" | od -An -tx1 | tr -d ' \n')" != "0a" ]; then
+    tail -n 1 "$dir/log" | filter_log
   fi
   rc=$(cat "$dir/rc" 2>/dev/null || echo 1)
   # 官方 docker actions 靠 --metadata-file / --iidfile 拿 digest：取 kaniko 的 --digest-file
