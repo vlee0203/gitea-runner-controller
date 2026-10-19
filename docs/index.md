@@ -19,7 +19,7 @@ workflow 以 **GitHub Actions 标准**为准：`runs-on: ubuntu-latest`、`uses:
 | [写 workflow](usage/overview.zh-cn.md) | 标准写法示例、池与 `runs-on` 的匹配规则 | 写/改 CI |
 | [在 workflow 里构建镜像](usage/image-building.zh-cn.md) | `docker build/push` 与官方 docker action 怎么被接住、构建日志、缓存策略与边界 | CI 里要出镜像 |
 | [架构与机制](advanced/architecture.zh-cn.md) | 先领取 + 无状态 facade、一次性 Pod、接管与 drain | 想改代码 / 排查深层问题 |
-| [安全模型](advanced/security.zh-cn.md) | 作用域隔离、平台只持注册令牌、**刻意不做**的那些事 | 安全评审 |
+| [安全模型](advanced/security.zh-cn.md) | 作用域隔离、平台不持管理 token、注册令牌与 runner 身份、**刻意不做**的那些事 | 安全评审 |
 | [兼容矩阵](advanced/compatibility.zh-cn.md) | 哪些 GitHub 能力可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 | 迁移既有 workflow |
 | [平台公共 action](advanced/actions-mirror.zh-cn.md) | 本地镜像了哪些 action、怎么再加一个、谁有权改 | 用/维护 `uses:` 的 action 源 |
 | [开发](advanced/development.zh-cn.md) | 代码结构、本地构建与测试、CI（GitHub / Gitea 两套 workflow） | 改代码 / 发版 |

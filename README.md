@@ -23,7 +23,7 @@ Gitea ──领取/回报──▶ controller ──建 Pod──▶ executor Po
 | [用法](docs/usage/overview.zh-cn.md) | 标准 workflow 写法、池与 `runs-on` 的匹配规则、能力对照 |
 | [用法 · 构建镜像](docs/usage/image-building.zh-cn.md) | `docker login/build/push` 与官方 docker action 怎么被接住、构建日志、缓存策略与边界 |
 | [进阶 · 架构](docs/advanced/architecture.zh-cn.md) | 先领取 + 无状态 facade、一次性 Pod、接管与 drain |
-| [进阶 · 安全](docs/advanced/security.zh-cn.md) | 作用域隔离、平台只持注册令牌、刻意不做的事 |
+| [进阶 · 安全](docs/advanced/security.zh-cn.md) | 作用域隔离、平台不持管理 token、注册令牌与 runner 身份、刻意不做的事 |
 | [进阶 · 兼容矩阵](docs/advanced/compatibility.zh-cn.md) | 哪些可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 |
 | [进阶 · 平台公共 action](docs/advanced/actions-mirror.zh-cn.md) | 本地镜像了哪些 action、怎么再加、谁有权改 |
 | [进阶 · 开发](docs/advanced/development.zh-cn.md) | 代码结构、本地构建与测试、CI |
@@ -78,5 +78,5 @@ jobs:
 
 ## 状态
 
-单副本（Lease 选主）+ 优雅 drain；已在 Gitea 1.27.3 / 28.1.0 与 k8s 1.28 上端到端实测，
+Lease 选主 + 无状态 facade + 滚动更新 drain；已在 Gitea 1.27.3 / 28.1.0 与 k8s 1.28 上端到端实测，
 包括用本平台构建本仓库自己的两个镜像（自举）。

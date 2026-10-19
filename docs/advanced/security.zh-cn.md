@@ -6,7 +6,7 @@ weight: 41
 
 # 安全模型
 
-一句话：**作用域隔离 + 平台只持一条注册令牌**；泄漏的代价被明确接受，不用"缩小作用域"当挡箭牌。
+一句话：**作用域隔离 + 平台不持有 Gitea 管理 API token**；注册令牌只在注册瞬间读取，注册后的 runner 身份 token 存 state Secret。泄漏的代价被明确接受，不用"缩小作用域"当挡箭牌。
 
 ## 1. 作用域隔离（这是地基）
 
@@ -17,14 +17,15 @@ Gitea 的 runner 模型是"**一条注册令牌的作用域决定这个 runner �
 
 于是"某个用户的令牌泄漏"**只影响该用户自己**，不波及平台；平台只需保证自己那条令牌不泄漏。
 
-## 2. 平台只持有注册令牌这一条凭据
+## 2. 平台不持有 Gitea 管理 API token
 
 | 措施 | 说明 |
 | --- | --- |
-| 不落盘 | 令牌放在 k8s Secret（`REGISTRATION_TOKEN_SECRET`），controller 在**注册那一刻**经 k8s API 读取；Pod 文件系统里没有它 |
+| 注册令牌不落盘 | 放在 k8s Secret（`REGISTRATION_TOKEN_SECRET`），controller 在**注册那一刻**经 k8s API 读取；**executor Pod** 文件系统里没有它 |
 | 不下发 | 注册令牌不会进入 executor Pod；Pod 只拿一次性 capability |
+| 长期身份只有 runner token | 注册后 Gitea 返回的 runner uuid+token 按池存进 state Secret（重启复用）；它的作用域由注册令牌决定，不是管理凭据 |
 | executor 侧一次性 | 每个 assignment 一张 capability（随机、绑定该 assignment、随 Pod 销毁），泄漏影响限于那一个 job |
-| 不需要额外凭据 | controller **不需要**任何 Gitea API token（不巡检、不删 runner、不读 job 列表） |
+| 不需要管理 token | controller **不需要**任何 Gitea 管理 API token（不巡检、不删 runner、不读 job 列表） |
 
 ## 3. 刻意**不做**的事（不是遗漏）
 

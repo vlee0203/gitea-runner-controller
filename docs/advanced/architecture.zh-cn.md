@@ -11,7 +11,7 @@ weight: 40
 | 现成方案 | 为什么不用 |
 | --- | --- |
 | Gitea 官方 runner 的 `kubernetes://` 模式 | 需要 k8s ≥ 1.30（靠 WebSocket `v5.channel.k8s.io` exec 进 job pod）；低版本上 Pod 建得起来但 exec 阶段被杀 |
-| GARM + provider-k8s | provider-k8s / garm-operator 只认 GitHub/ARC 约定，没有 Gitea 实现 |
+| GARM + garm-provider-k8s | 支持 GitHub 与 Gitea（Gitea ≥ 1.24），也能用 Mercedes-Benz 的 k8s provider/operator 按需起 Pod；但它是独立的 runner 管理器，需要在 Gitea 侧持有管理凭据（建/删 runner、管池）并引入自己的 webhook/provider 控制面，与本项目"不持管理 token、只持注册令牌与 runner 身份"的模型不符 |
 | Gitea Enterprise ARC | 商业版，靠 Enterprise 侧的 JIT/scale-set 协议 |
 
 根因：**Gitea OSS 没有 JIT configuration API**——服务端拿不到"把指定 job 绑给指定 runner"的能力，
@@ -49,7 +49,7 @@ Gitea ◀─(worker 凭注册身份领取/回报)─ controller ──建 Pod─
 ```
 
 - **worker**：每个池一个，= 一条 Gitea runner 注册 + 一个领活循环 + 本地槽位（`slots`）。
-- **facade**：每个 worker 一个，只把预领取的 task 交给持对应 capability 的 executor。
+- **facade**：每个 controller 实例一个（所有池共用），从 assignment Secret 解析预领取的 task，并把回报交给对应池的领取者身份。
 - **executor Pod**：一次性，跑完即删；命名 `grc-<repo>-<job>-<taskid>`，按 label 定位。
 - **构建型 job**：Pod 里多一个官方 kaniko 容器（见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)）。
 
