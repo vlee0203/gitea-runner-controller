@@ -19,6 +19,13 @@ on:
 permissions:
   contents: read
 
+# 内网出网代理（拉 Docker Hub / gcr.io 的基础镜像）。没有代理就留空。
+# NO_PROXY 里必须包含 secrets.REGISTRY 的主机名，否则推镜像也会走代理。
+env:
+  HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+  HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
+  NO_PROXY: ${{ secrets.NO_PROXY }}
+
 # 镜像标签规则（docker/metadata-action）：
 #   main 上         → sha-<短 commit sha> + latest
 #   打 vX.Y.Z tag   → sha-<短 commit sha> + vX.Y.Z
