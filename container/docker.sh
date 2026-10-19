@@ -51,16 +51,20 @@ parse_build() {
       --platform=*)    GRC_PLATFORM=${1#*=}; shift ;;
       --iidfile=*)      GRC_IID=${1#*=}; shift ;;
       --metadata-file=*) GRC_META=${1#*=}; shift ;;
-      --cache-from=*|--cache-to=*|--secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--label=*|--progress=*|--provenance=*|--sbom=*|--attest=*)
+      --cache-from=*|--cache-to=*|--secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--label=*|--progress=*)
                        GRC_IGNORED="$GRC_IGNORED ${1%%=*}"; shift ;;
+      # 构建证明类参数（官方 build-push-action 默认会带 --attest）：kaniko 做不到，静默忽略。
+      # 它们都带值，必须连值一起吃掉 —— 否则 `--attest type=provenance,…` 的值会被当成 context。
+      --attest=*|--provenance=*|--sbom=*) shift ;;
       --push)       GRC_PUSH=1; shift ;;
       # —— 带值、但 kaniko 无对应物的参数：连值一起吃掉，只记一笔 ——
       --iidfile)    GRC_IID=$2; shift 2 ;;
       --metadata-file) GRC_META=$2; shift 2 ;;
+      --attest|--provenance|--sbom) shift 2 ;;
       --cache-from|--cache-to|--secret|--ssh|--output|-o|--builder|--network|--shm-size|--label)
                     GRC_IGNORED="$GRC_IGNORED $1"; shift 2 ;;
       # —— 布尔、无对应物的参数 ——
-      --progress|--provenance|--sbom|--attest|--no-cache|--pull|--quiet|-q|--load|--compress)
+      --progress|--no-cache|--pull|--quiet|-q|--load|--compress)
                     GRC_IGNORED="$GRC_IGNORED $1"; shift ;;
       --)           shift; [ $# -gt 0 ] && GRC_CTX=$1 && shift ;;
       -*)           GRC_IGNORED="$GRC_IGNORED $1"; shift ;;
