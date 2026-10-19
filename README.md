@@ -29,6 +29,8 @@ Gitea ──领取/回报──▶ controller ──建 Pod──▶ executor Po
 | [进阶 · 开发](docs/advanced/development.zh-cn.md) | 代码结构、本地构建与测试、CI |
 | [帮助 · 排查](docs/help/troubleshooting.zh-cn.md) | 症状 → 原因 |
 
+在线文档：<https://vlee0203.github.io/gitea-runner-controller/>
+
 ## 快速开始
 
 ```bash

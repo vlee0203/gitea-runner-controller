@@ -1,0 +1,69 @@
+site_name: gitea-runner-controller
+site_description: 把 Gitea Actions 的 job 跑成 Kubernetes 一次性 Pod 的 controller
+site_url: https://vlee0203.github.io/gitea-runner-controller/
+repo_url: https://github.com/vlee0203/gitea-runner-controller
+repo_name: vlee0203/gitea-runner-controller
+edit_uri: edit/main/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  language: zh
+  font: false
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: 切换到浅色模式
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+nav:
+  - 首页: index.md
+  - 部署:
+      - 部署总览: installation/overview.zh-cn.md
+      - 内网（不出网）部署: installation/air-gapped.zh-cn.md
+  - 用法:
+      - 写 workflow: usage/overview.zh-cn.md
+      - 在 workflow 里构建镜像: usage/image-building.zh-cn.md
+  - 进阶:
+      - 架构与机制: advanced/architecture.zh-cn.md
+      - 安全模型: advanced/security.zh-cn.md
+      - 兼容矩阵: advanced/compatibility.zh-cn.md
+      - 平台公共 action: advanced/actions-mirror.zh-cn.md
+      - 开发: advanced/development.zh-cn.md
+  - 帮助:
+      - 排查: help/troubleshooting.zh-cn.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
