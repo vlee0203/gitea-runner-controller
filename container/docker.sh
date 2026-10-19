@@ -177,9 +177,11 @@ submit() {
   else
     printf '%s\n' "--no-push" >> "$dir/args"
   fi
-  # info：kaniko 的构建步骤和 RUN 输出都在这一级（RUN 输出直接走 stdout，没有前缀）；
+  # text：kaniko 默认 --log-format=color（ForceColors，不看 TTY），日志行以 ANSI
+  # 颜色码开头，filter_log 的 ^INFO[ 匹配不到 → 会把内部流水原样漏出去。
+  # info：构建步骤和 RUN 输出都在这一级（RUN 输出直接走 stdout，没有前缀）；
   # 内部流水由 filter_log 过滤，只留 >>> 指令头、RUN 输出、[cache] 和告警/错误。
-  printf '%s\n' "--verbosity=info" >> "$dir/args"
+  printf '%s\n' "--log-format=text" "--verbosity=info" >> "$dir/args"
   printf '%s\n' "--digest-file" "$dir/digest" >> "$dir/args"
   : > "$dir/env"
   for pair in "HTTP_PROXY:${HTTP_PROXY:-}" "http_proxy:${http_proxy:-}" "HTTPS_PROXY:${HTTPS_PROXY:-}" "https_proxy:${https_proxy:-}"; do
