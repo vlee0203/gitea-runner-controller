@@ -60,19 +60,32 @@ handle_cache_arg() {
 # 过滤 kaniko 的 info 内部流水：只留 Dockerfile 指令头、RUN 输出（不走 logrus）、
 # 缓存命中情况和告警/错误。RUN 命令的 stdout/stderr 是直接继承的，没有 INFO 前缀。
 filter_log() {
-  awk '
-    /^INFO\[[^]]*\] / {
-      msg = $0
-      sub(/^INFO\[[^]]*\] /, "", msg)
-      if (msg == "Found cached layer") { print "[cache] hit"; next }
+  # 先剥掉 ANSI 颜色码：kaniko 的 color 格式每行是 "\x1b[36mINFO\x1b[0m[0000] ..."。
+  # 同时兼容 text 格式（time="..." level=info msg="..."），免得日志格式一变过滤器就失效。
+  esc=$(printf '\033')
+  sed "s/${esc}\\[[0-9;]*m//g" | awk '
+    function keep(msg) {
+      if (msg == "Found cached layer") { print "[cache] hit"; return }
       if (msg ~ /^No cached layer found for cmd /) {
         sub(/^No cached layer found for cmd /, "", msg)
         print "[cache] miss: " msg
-        next
+        return
       }
-      if (msg ~ /^(RUN|COPY|ADD|WORKDIR|ARG|ENV|LABEL|FROM|ENTRYPOINT|CMD|HEALTHCHECK|USER|EXPOSE|VOLUME|SHELL|STOPSIGNAL|ONBUILD)( |$)/) {
+      if (msg ~ /^(RUN|COPY|ADD|WORKDIR|ARG|ENV|LABEL|FROM|ENTRYPOINT|CMD|HEALTHCHECK|USER|EXPOSE|VOLUME|SHELL|STOPSIGNAL|ONBUILD)( |$)/)
         print ">>> " msg
-      }
+    }
+    /^INFO\[[^]]*\] / {
+      msg = $0
+      sub(/^INFO\[[^]]*\] /, "", msg)
+      keep(msg)
+      next
+    }
+    /^time="[^"]*" level=info msg="/ {
+      msg = $0
+      sub(/^.* msg="/, "", msg)
+      sub(/"$/, "", msg)
+      gsub(/\\"/, "\"", msg)
+      keep(msg)
       next
     }
     { print }
@@ -177,11 +190,12 @@ submit() {
   else
     printf '%s\n' "--no-push" >> "$dir/args"
   fi
-  # text：kaniko 默认 --log-format=color（ForceColors，不看 TTY），日志行以 ANSI
-  # 颜色码开头，filter_log 的 ^INFO[ 匹配不到 → 会把内部流水原样漏出去。
+  # color：kaniko 的 color 格式是 "INFO[0000] msg"（text 格式反而会变成
+  # time="..." level=info msg="..."，没法稳定解析）。color 会强制带 ANSI 颜色码，
+  # filter_log 里先剥掉再匹配。
   # info：构建步骤和 RUN 输出都在这一级（RUN 输出直接走 stdout，没有前缀）；
   # 内部流水由 filter_log 过滤，只留 >>> 指令头、RUN 输出、[cache] 和告警/错误。
-  printf '%s\n' "--log-format=text" "--verbosity=info" >> "$dir/args"
+  printf '%s\n' "--log-format=color" "--verbosity=info" >> "$dir/args"
   printf '%s\n' "--digest-file" "$dir/digest" >> "$dir/args"
   : > "$dir/env"
   for pair in "HTTP_PROXY:${HTTP_PROXY:-}" "http_proxy:${http_proxy:-}" "HTTPS_PROXY:${HTTPS_PROXY:-}" "https_proxy:${https_proxy:-}"; do
