@@ -59,21 +59,27 @@ Gitea ◀─(worker 凭注册身份领取/回报)─ controller ──建 Pod─
 
 - **worker 的注册身份**（uuid + token）：存 k8s Secret，重启复用（否则每次重启都在 Gitea 里堆一条新记录）。
   注册顺序是**先证明 Secret 可写、再注册**——注册会产生一条只有 API 能删的记录，先注册后落盘失败会留僵尸。
-- **in-flight assignment**：以 k8s 为状态源（Pod 的 label/annotation），不引数据库。
+- **in-flight assignment**：以 k8s 为状态源 —— 每条 assignment 一个 Secret（task、poolKey、capability
+  哈希、lastSeen），不引数据库，也不把 assignment 只存在进程内存里。
 
-controller 启动时 **Recover**：把上一次进程留下的 executor Pod 全部清理并把对应 task 报失败供 Gitea
-rerun（claim 模型下 facade 的内存态已丢，无法接管——这是 at-least-once 语义）。
+controller 启动时 **Recover**：列出上一次留下的 executor Pod；assignment Secret 还在且池匹配的**接管**
+（`Adopt`），assignment/pool 已不存在的才当孤儿删除。facade 无状态，所以接管不要求原进程还活着。
 
 Pod 起不来（`StartError` / `ImagePullBackOff` / 配置错）也会被判定为失败：这类状态会让 Pod **永远停在
 Pending**，不处理就会占着槽位、并卡住 controller 的 drain 与滚动更新。
 
-## 单例与 drain
+## 滚动更新与 drain
 
-- **副本必须为 1**：facade 的 `capability → assignment` 表是进程内存态，而 executor Pod 经 Service
-  访问 facade，多副本会被负载均衡打到"不认识这个 task"的实例上。用 Lease 选主（`strategy: Recreate`），
-  并发靠池的 `slots` 而不是副本数。
-- **优雅关闭（drain）**：SIGTERM / 失去 leadership 时先停止领取新 task，在跑的 job 继续跑
-  （job 的 context 不随 leader context 取消），最多等 `SHUTDOWN_TIMEOUT`（默认 30m，
-  需 ≤ `terminationGracePeriodSeconds`）；超时才取消，并把被砍的 task 报失败供 rerun。
+- **facade 无状态**：`capability → assignment` 每次从 assignment Secret 解析（`K8sResolver`），所以
+  **任何实例都能服务任何 job**；executor Pod 经 Service 访问 facade，不需要粘在创建它的实例上。
+- **滚动更新**：Deployment 用 `RollingUpdate`（maxSurge 1 / maxUnavailable 1）+ readinessProbe
+  （TCP 8080）。新实例只有**拿到 Lease** 后才会启动 facade / 变 Ready；老实例收到 SIGTERM 后
+  `ReleaseOnCancel: true` 立即释放租约，新实例可以马上接管并开始领新 task，**不必等老实例 drain 完**。
+  并发仍由池的 `slots` 控制；副本保持 1 只是部署上的简化。
+- **drain（老实例收尾）**：老实例停止领新 task，但已领的 job 用独立于 leader context 的 job context
+  继续跑；最多等 `SHUTDOWN_TIMEOUT`（默认 30m，须 ≤ `terminationGracePeriodSeconds`）。期间每 15s
+  检查：某 job 连续 `DRAIN_SILENCE`（默认 10m）没有和 facade 通信 → 判卡死，单独取消（报失败 + 删
+  Pod）；还在上报的 job 继续等。到总超时则取消剩余 job。这段 drain 只决定老实例何时退出，不影响新
+  实例服务与领取。
 
 `controller` 是本仓库唯一的可执行文件（`gitea-runner-controller controller`）。

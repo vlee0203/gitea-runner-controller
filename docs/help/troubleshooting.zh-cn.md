@@ -15,7 +15,7 @@ weight: 50
 | run 建了，但**零 job、零日志** | workflow **YAML 语法错**（Gitea 静默失败） | 本地先 `yaml` 解析一遍；常见坑是值没加引号而被 `: ` 截断 |
 | job 跑到一半变 `cancelled`（构建类） | Pod 被**驱逐**：`ephemeralStorage` 超限（LimitRange 默认值很小） | `kubectl get events` 找 `Evicted ... exceeds ... ephemeral`；池里把 `resources.ephemeralStorage` 调大 |
 | 改了镜像/代码，**行为没变** | 池镜像用的是可变 tag（如 `:ubuntu-latest`），拉取策略又非 Always，Pod 用的是节点缓存 | 平台 executor Pod 已强制 `PullAlways`；自建池镜像时注意同样问题 |
-| 部署/滚动更新**卡住不完成** | controller 在 **drain**：等正在跑的 job 结束（上限 `SHUTDOWN_TIMEOUT`，默认 30m）；或有"起不来"的 Pod 占着槽位 | 看 `kubectl get pods` 有无 `Init:StartError`/`ImagePullBackOff`；后者现在会被判失败并自动删除。要"发布优先"就调小 `SHUTDOWN_TIMEOUT` |
+| 部署/滚动更新**长时间未完成** | 老实例在 drain 自己的在跑 job（新实例已接管服务，不影响可用性）；或有"起不来"的 Pod 占着槽位 | `kubectl get pods`：老 controller 是 Terminating、新实例 Ready 即正常；单 job 静默超 `DRAIN_SILENCE`（默认 10m）会被单独取消。要缩短就调小 `SHUTDOWN_TIMEOUT` |
 | job 失败并写着 `executor 无法启动: …` | executor Pod 起不来（镜像名错、缺 Secret/ConfigMap、镜像没有 shell…） | 按日志里的原因修（例如 kaniko 必须用 `-debug` 变体，普通镜像没有 shell） |
 | job 失败：`不支持 docker run` / `多平台构建…做不到` | 用了需要真 docker daemon 的写法 | 见[兼容矩阵](../advanced/compatibility.zh-cn.md)；镜像构建改用 `docker build/push` 或官方 docker action |
 | Gitea 的 Runners 列表里堆着**离线条目** | 平台的 worker 记录轮换/池 label 改动后会留下旧记录；**平台刻意不自动删除**（会误伤别人的 runner） | 在对应作用域的 Runners 页面手工删，或按作用域调 `DELETE …/actions/runners/{id}` |

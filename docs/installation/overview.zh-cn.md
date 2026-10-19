@@ -155,7 +155,9 @@ jobs:
 
 ## 升级与回滚
 
-改配置（env、pools、镜像 tag）后 `kubectl apply` 即可：Deployment 用 `strategy: Recreate` +
-`terminationGracePeriodSeconds: 3660`，controller 在退出前会**先等在跑的 job 跑完**（drain，
-上限 `SHUTDOWN_TIMEOUT`，默认 30m）。所以"发布要等一会儿"是设计行为，不是卡住；
-要"发布优先"就把 `SHUTDOWN_TIMEOUT` 调小（代价是发布时砍掉在跑的 job，Gitea 侧失败可 rerun）。
+改配置（env、pools、镜像 tag）后 `kubectl apply` 即可：Deployment 用 `RollingUpdate`（maxSurge 1 /
+maxUnavailable 1）+ readinessProbe。新实例拿到租约并变 Ready 后立即开始服务和领取新 task；老实例收到
+SIGTERM 后立即释放租约，在后台 drain 自己的在跑 job（上限 `SHUTDOWN_TIMEOUT`，默认 30m；单个 job 静默
+超过 `DRAIN_SILENCE`，默认 10m，会被判卡死单独取消）。所以**新实例/新 job 不会等老实例 drain 完**；
+老 Pod 可能还会停留一段时间收尾，属正常行为。要"发布优先"就把 `SHUTDOWN_TIMEOUT` 调小（代价是砍掉在跑
+的 job，Gitea 侧失败可 rerun）。

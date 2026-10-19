@@ -22,7 +22,7 @@ Gitea ──领取/回报──▶ controller ──建 Pod──▶ executor Po
 | [安装 · 内网部署](docs/installation/air-gapped.zh-cn.md) | 不能出网的集群：镜像/action 怎么搬进去、证书与收口 |
 | [用法](docs/usage/overview.zh-cn.md) | 标准 workflow 写法、池与 `runs-on` 的匹配规则、能力对照 |
 | [用法 · 构建镜像](docs/usage/image-building.zh-cn.md) | `docker login/build/push` 与官方 docker action 怎么被接住、构建日志、缓存策略与边界 |
-| [进阶 · 架构](docs/advanced/architecture.zh-cn.md) | 先领取 + facade 交接、一次性 Pod、状态恢复、单例与 drain |
+| [进阶 · 架构](docs/advanced/architecture.zh-cn.md) | 先领取 + 无状态 facade、一次性 Pod、接管与 drain |
 | [进阶 · 安全](docs/advanced/security.zh-cn.md) | 作用域隔离、平台只持注册令牌、刻意不做的事 |
 | [进阶 · 兼容矩阵](docs/advanced/compatibility.zh-cn.md) | 哪些可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 |
 | [进阶 · 平台公共 action](docs/advanced/actions-mirror.zh-cn.md) | 本地镜像了哪些 action、怎么再加、谁有权改 |
