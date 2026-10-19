@@ -65,6 +65,10 @@ Gitea 默认先扫描 `.gitea/workflows`，该目录存在时不会扫描 `.gith
 构建层缓存默认关闭；Gitea 版目前没写 `cache-from/cache-to`。要开就在 build-push 步骤加
 `type=registry,ref=…`，见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。
 
+`.github/workflows/codeql.yaml` 用 GitHub 官方的 CodeQL 做 Go 静态安全审计（push / PR / 每周
+schedule），结果在仓库的 Security → Code scanning 查看。它依赖 GitHub 的 code scanning API，只在
+GitHub 上跑；Gitea 侧因为 `.gitea/workflows` 存在，不会执行 `.github/workflows`。
+
 ## 改动时注意
 
 - executor Pod 的镜像**强制 `PullAlways`**（池镜像用可变 tag，缓存会掩盖改动）。
