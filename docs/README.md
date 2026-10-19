@@ -29,6 +29,6 @@ workflow 以 **GitHub Actions 标准**为准：`runs-on: ubuntu-latest`、`uses:
 
 ## 相关
 
-- 仓库根 [README](../README.md)：一句话定位、镜像、构建方式（速查）。
+- 仓库根 [README](https://github.com/vlee0203/gitea-runner-controller/blob/main/README.md)：一句话定位、镜像、构建方式（速查）。
 - `deploy/`：`namespace/all.yaml`（用户级）、`cluster/all.yaml`（集群级）、`cache.yaml`（可选：共享 `actions/cache`，与镜像构建层缓存无关）。
 - `container/docker.sh`：本平台的 `docker` 替身（把标准 docker 命令转给同 Pod 的 kaniko 容器）。

@@ -1,0 +1,6 @@
+# GitHub Pages（Jekyll）配置。
+# docs/README.md 带 YAML front matter，而 jekyll-readme-index 默认
+# 只处理“没有 front matter 的静态 README”；打开这个开关后它才会把
+# README 生成为站点根目录的 index.html。
+readme_index:
+  with_frontmatter: true
