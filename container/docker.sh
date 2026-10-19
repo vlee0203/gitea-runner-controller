@@ -35,7 +35,7 @@ strip_scheme() {
 # 解析 build 的参数（$@ = build 之后的所有参数），结果放进 GRC_* 变量
 parse_build() {
   GRC_TAGS=""; GRC_FILE=""; GRC_CTX=""; GRC_ARGS=""; GRC_TARGET=""; GRC_PLATFORM=""
-  GRC_PUSH=0; GRC_IGNORED=""; GRC_IID=""; GRC_META=""
+  GRC_PUSH=0; GRC_IGNORED=""; GRC_IID=""; GRC_META=""; GRC_LABELS=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -t|--tag)     GRC_TAGS="$GRC_TAGS $2"; shift 2 ;;
@@ -51,7 +51,8 @@ parse_build() {
       --platform=*)    GRC_PLATFORM=${1#*=}; shift ;;
       --iidfile=*)      GRC_IID=${1#*=}; shift ;;
       --metadata-file=*) GRC_META=${1#*=}; shift ;;
-      --cache-from=*|--cache-to=*|--secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--label=*|--progress=*)
+      --label=*)       GRC_LABELS="$GRC_LABELS ${1#*=}"; shift ;;
+      --cache-from=*|--cache-to=*|--secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--progress=*)
                        GRC_IGNORED="$GRC_IGNORED ${1%%=*}"; shift ;;
       # 构建证明类参数（官方 build-push-action 默认会带 --attest）：kaniko 做不到，静默忽略。
       # 它们都带值，必须连值一起吃掉 —— 否则 `--attest type=provenance,…` 的值会被当成 context。
@@ -61,7 +62,8 @@ parse_build() {
       --iidfile)    GRC_IID=$2; shift 2 ;;
       --metadata-file) GRC_META=$2; shift 2 ;;
       --attest|--provenance|--sbom) shift 2 ;;
-      --cache-from|--cache-to|--secret|--ssh|--output|-o|--builder|--network|--shm-size|--label)
+      --label)      GRC_LABELS="$GRC_LABELS $2"; shift 2 ;;
+      --cache-from|--cache-to|--secret|--ssh|--output|-o|--builder|--network|--shm-size)
                     GRC_IGNORED="$GRC_IGNORED $1"; shift 2 ;;
       # —— 布尔、无对应物的参数 ——
       --progress|--no-cache|--pull|--quiet|-q|--load|--compress)
@@ -79,7 +81,7 @@ parse_build() {
   case "$GRC_PLATFORM" in
     *,*) die "多平台构建（--platform=$GRC_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台（多平台需要 binfmt/QEMU 模拟，本集群安全基线不允许特权）" ;;
   esac
-  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "$GRC_ARGS" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" > "$SPEC"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "$GRC_ARGS" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" "$GRC_LABELS" > "$SPEC"
 }
 
 # 把一次构建（GRC_* + GRC_DEST）交给 kaniko 容器，并把它的输出流回来
@@ -94,6 +96,8 @@ submit() {
   : > "$dir/args"
   printf '%s\n' "--context=dir://$GRC_CTX" "--dockerfile=$GRC_FILE" >> "$dir/args"
   for a in $GRC_ARGS; do printf '%s\n' "--build-arg" "$a" >> "$dir/args"; done
+  # OCI labels（metadata-action 会传一串）：kaniko 支持 --label，原样转发
+  for l in $GRC_LABELS; do printf '%s\n' "--label" "$l" >> "$dir/args"; done
   [ -z "$GRC_TARGET" ]   || printf '%s\n' "--target" "$GRC_TARGET" >> "$dir/args"
   [ -z "$GRC_PLATFORM" ] || printf '%s\n' "--custom-platform" "$GRC_PLATFORM" >> "$dir/args"
   if [ -n "${GRC_DEST:-}" ]; then
@@ -153,7 +157,10 @@ submit() {
   fi
   rc=$(cat "$dir/rc" 2>/dev/null || echo 1)
   # 官方 docker actions 靠 --metadata-file / --iidfile 拿 digest：取 kaniko 的 --digest-file
-  digest=$(tr -d '\n' < "$dir/digest" 2>/dev/null)
+  # 构建失败时 kaniko 不会写 digest 文件 —— 先判存在，避免 dash 在重定向阶段报
+  # “cannot open …/digest” 把真正的构建错误淹掉
+  digest=""
+  [ -f "$dir/digest" ] && digest=$(tr -d '\n' < "$dir/digest")
   tags=$(printf '%s' "${GRC_DEST:-${GRC_TAGS:-}}" | tr ' ' ',' | sed 's/^,*//; s/,*$//')
   if [ -n "$digest" ]; then
     [ -z "$iid" ] || printf '%s' "$digest" > "$iid"
@@ -214,7 +221,7 @@ case "$cmd" in
   push)
     ref=${1:-}; [ -n "$ref" ] || die "push 需要镜像名：docker push <ref>"
     [ -f "$SPEC" ] || die "没有可推送的镜像：本平台没有本地镜像库，push 只能跟在同一个 job 里的 build 之后"
-    { read -r GRC_CTX <&3; read -r GRC_FILE <&3; read -r GRC_ARGS <&3; read -r GRC_TARGET <&3; read -r GRC_PLATFORM <&3; read -r GRC_TAGS <&3; } 3< "$SPEC" || true
+    { read -r GRC_CTX <&3; read -r GRC_FILE <&3; read -r GRC_ARGS <&3; read -r GRC_TARGET <&3; read -r GRC_PLATFORM <&3; read -r GRC_TAGS <&3; read -r GRC_LABELS <&3; } 3< "$SPEC" || true
     # 如果 ref 是上次 build 的某个 tag，就把那批 tag 一起推掉（kaniko 一次可推多个 destination）
     case " ${GRC_TAGS:-} " in
       *" $ref "*) GRC_DEST="$GRC_TAGS" ;;
