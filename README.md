@@ -21,7 +21,7 @@ Gitea ──领取/回报──▶ controller ──建 Pod──▶ executor Po
 | [安装](docs/installation/overview.zh-cn.md) | 三种作用域形态、前置条件、部署步骤与校验、升级与回滚 |
 | [安装 · 内网部署](docs/installation/air-gapped.zh-cn.md) | 不能出网的集群：镜像/action 怎么搬进去、证书与收口 |
 | [用法](docs/usage/overview.zh-cn.md) | 标准 workflow 写法、池与 `runs-on` 的匹配规则、能力对照 |
-| [用法 · 构建镜像](docs/usage/image-building.zh-cn.md) | `docker login/build/push` 与官方 docker action 怎么被接住、边界与坑 |
+| [用法 · 构建镜像](docs/usage/image-building.zh-cn.md) | `docker login/build/push` 与官方 docker action 怎么被接住、构建日志、缓存策略与边界 |
 | [进阶 · 架构](docs/advanced/architecture.zh-cn.md) | 先领取 + facade 交接、一次性 Pod、状态恢复、单例与 drain |
 | [进阶 · 安全](docs/advanced/security.zh-cn.md) | 作用域隔离、平台只持注册令牌、刻意不做的事 |
 | [进阶 · 兼容矩阵](docs/advanced/compatibility.zh-cn.md) | 哪些可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 |
@@ -60,11 +60,15 @@ jobs:
 | `ghcr.io/vlee0203/gitea-runner-controller/controller:latest` | controller（`container/controller.Dockerfile`，distroless） |
 | `ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest` | 执行环境（工具链 + stock gitea-runner + `docker` 替身） |
 
+> 部署请钉不可变的 `sha-<短 commit sha>` 标签；`latest` / `ubuntu-latest` 会被下次构建覆盖，只适合临时试用。
+
 ## 能力速查
 
-- ✅ `checkout` / `run` / `if` / `needs`+outputs / `matrix` / artifacts / cache / secrets / vars /
+- ✅ `checkout` / `run` / `if` / `needs`+outputs / `matrix` / artifacts / `actions/cache` / secrets / vars /
   `timeout-minutes` / `continue-on-error` / `concurrency` / 可复用 workflow / `workflow_dispatch`
-- ✅ 在 workflow 里构建并推送镜像：`docker login|build|push` 与官方 docker action（内部用 kaniko）
+- ✅ 在 workflow 里构建并推送镜像：`docker login|build|push` 与官方 docker action（内部用 kaniko）；
+  构建日志只显示步骤、RUN 输出与 `[cache]` 状态
+- ✅ 镜像构建层缓存：默认关闭，workflow 显式写 `cache-from/cache-to: type=registry` 时启用
 - ❌ 需要真 docker daemon 的写法：`container:` / `services:` / `uses: docker://` / `docker run`
 - ❌ 多平台构建（需 binfmt/QEMU，本集群安全基线不允许特权）、`windows-*` / `macos-*`
 

@@ -19,7 +19,7 @@ workflow 以 **GitHub Actions 标准**为准：`runs-on: ubuntu-latest`、`uses:
 | [安装](installation/overview.zh-cn.md) | 部署总览 | 三种作用域形态、前置条件、逐步部署、部署后校验 | 第一次部署 / 换形态 |
 | [安装](installation/air-gapped.zh-cn.md) | 内网（不出网）部署 | 要提前搬哪四样东西、镜像地址改哪几处、证书与收口 | 部署到不能出网的集群 |
 | [用法](usage/overview.zh-cn.md) | 写 workflow | 标准写法示例、池与 `runs-on` 的匹配规则 | 写/改 CI |
-| [用法](usage/image-building.zh-cn.md) | 在 workflow 里构建镜像 | `docker build/push` 与官方 docker action 怎么被接住、边界在哪 | CI 里要出镜像 |
+| [用法](usage/image-building.zh-cn.md) | 在 workflow 里构建镜像 | `docker build/push` 与官方 docker action 怎么被接住、构建日志、缓存策略与边界 | CI 里要出镜像 |
 | [进阶](advanced/architecture.zh-cn.md) | 架构与机制 | 先领取 + facade 交接、一次性 Pod、状态恢复、单例与 drain | 想改代码 / 排查深层问题 |
 | [进阶](advanced/security.zh-cn.md) | 安全模型 | 作用域隔离、平台只持注册令牌、**刻意不做**的那些事 | 安全评审 |
 | [进阶](advanced/compatibility.zh-cn.md) | 兼容矩阵 | 哪些 GitHub 能力可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 | 迁移既有 workflow |
