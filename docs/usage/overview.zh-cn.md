@@ -10,18 +10,23 @@ weight: 30
 
 ```yaml
 name: ci
-on: [push, workflow_dispatch]
+on:
+  push:
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.26']
+        go:
+          - '1.26'
     steps:
       - uses: actions/checkout@v4
       - run: go test ./...
       - uses: actions/upload-artifact@v4
-        with: { name: logs, path: '*.log' }
+        with:
+          name: logs
+          path: '*.log'
 ```
 
 在 workflow 里构建并推送镜像也是标准写法，见[在 workflow 里构建镜像](image-building.zh-cn.md)。
@@ -32,9 +37,17 @@ jobs:
 Pod，用的就是这个池的镜像与资源。
 
 ```yaml
-- labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
+- labels:
+    - self-hosted
+    - linux
+    - x64
+    - ubuntu-latest
+    - ubuntu-24.04
   image: ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest
-  resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
+  resources:
+    cpu: '2'
+    memory: 4Gi
+    ephemeralStorage: 10Gi
   slots: 2          # 这个池最多同时跑几个 job；满了就留在 Gitea 队列等位
   timeout: 1h       # 单个 job 的执行上限（Pod 的 activeDeadlineSeconds）
 ```
@@ -79,8 +92,9 @@ API）。所以写错 `runs-on` 的表现是"job 卡住不动"，先检查 label
 
 | 能力 | 状态 |
 | --- | --- |
-| `actions/checkout@v4`、`actions/upload/download-artifact@v4`、`actions/cache@v4` | ✅（cache 跨 job 命中需要共享缓存服务器，见[部署](../installation/overview.zh-cn.md)） |
+| `actions/checkout@v4`、`actions/upload/download-artifact@v4`、`actions/cache@v4` | ✅（`actions/cache` 跨 job 命中需要共享 cache-server，见[部署](../installation/overview.zh-cn.md)；它与镜像构建层缓存是两套） |
 | `matrix`、`needs` + outputs、`if`、`env`、`github` 上下文、`secrets`/`vars` | ✅ |
 | `concurrency` + `cancel-in-progress`、`timeout-minutes`、`continue-on-error` | ✅（Gitea 文档把这几条列为"忽略"，实测**是生效的**，属 runner 侧实现） |
 | `container:` / `services:` / `uses: docker://` | ❌ 需要真 docker daemon，见[兼容矩阵](../advanced/compatibility.zh-cn.md) |
 | 在 workflow 里 `docker build` / 官方 docker action | ✅ 见[在 workflow 里构建镜像](image-building.zh-cn.md) |
+| 镜像构建层缓存 | 默认**关闭**；workflow 显式写 `cache-from/cache-to: type=registry,ref=…` 时启用（kaniko registry 缓存），`type=gha`/`type=local` 不支持，`no-cache: true` 可关闭 |

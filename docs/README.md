@@ -24,10 +24,11 @@ workflow 以 **GitHub Actions 标准**为准：`runs-on: ubuntu-latest`、`uses:
 | [进阶](advanced/security.zh-cn.md) | 安全模型 | 作用域隔离、平台只持注册令牌、**刻意不做**的那些事 | 安全评审 |
 | [进阶](advanced/compatibility.zh-cn.md) | 兼容矩阵 | 哪些 GitHub 能力可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 | 迁移既有 workflow |
 | [进阶](advanced/actions-mirror.zh-cn.md) | 平台公共 action | 本地镜像了哪些 action、怎么再加一个、谁有权改 | 用/维护 `uses:` 的 action 源 |
+| [进阶](advanced/development.zh-cn.md) | 开发 | 代码结构、本地构建与测试、CI（GitHub / Gitea 两套 workflow） | 改代码 / 发版 |
 | [帮助](help/troubleshooting.zh-cn.md) | 排查 | 症状 → 原因（静默失败、被驱逐、卡住、改了没生效…） | 出问题 |
 
 ## 相关
 
 - 仓库根 [README](../README.md)：一句话定位、镜像、构建方式（速查）。
-- `deploy/`：`namespace/all.yaml`（用户级）、`cluster/all.yaml`（集群级）、`cache.yaml`（可选共享缓存）。
+- `deploy/`：`namespace/all.yaml`（用户级）、`cluster/all.yaml`（集群级）、`cache.yaml`（可选：共享 `actions/cache`，与镜像构建层缓存无关）。
 - `container/docker.sh`：本平台的 `docker` 替身（把标准 docker 命令转给同 Pod 的 kaniko 容器）。

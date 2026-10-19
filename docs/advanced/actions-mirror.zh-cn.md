@@ -19,10 +19,11 @@ weight: 44
 | `docker` | `login-action`、`build-push-action`、`setup-qemu-action`、`setup-buildx-action`、`metadata-action`、`bake-action` |
 | 第三方（用得极多，镜像它们=信任其上游） | `ruby/setup-ruby`、`shivammathur/setup-php`、`softprops/action-gh-release`、`peter-evans/create-pull-request` |
 
-全部 **public**（所有用户的所有仓库都能用）；除下节列的 4 个例外都是 **pull mirror**，Gitea 会按间隔自动同步上游。
+全部 **public**（所有用户的所有仓库都能用）；上表共 **23 个**，除下节列的 4 个例外都是 **pull mirror**，
+Gitea 会按间隔自动同步上游。
 
-这 15 个都经实测：临时分支上四个 job（go / node / python / script）全绿，覆盖 `checkout@v4`、
-`setup-go@v5`、`setup-node@v4`、`setup-python@v5`、`github-script@v7` 五个 action。
+其中 `checkout@v4`、`setup-go@v5`、`setup-node@v4`、`setup-python@v5`、`github-script@v7` 五个已经在
+临时分支上实测全绿（四个 job：go / node / python / script）。
 
 ## 再加一个 action
 

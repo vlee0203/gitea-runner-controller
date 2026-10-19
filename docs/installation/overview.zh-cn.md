@@ -48,11 +48,11 @@ kubectl -n <ns> create secret generic gitea-runner-controller-registration --fro
 #    pools.yaml          —— 池（labels / image / resources / slots / timeout）
 kubectl apply -f deploy/namespace/all.yaml    # 或 deploy/cluster/all.yaml
 
-# 3.（可选）共享缓存服务器：跨 job 命中 actions/cache，否则每个一次性 Pod 都是冷缓存
+# 3.（可选）共享 actions/cache 服务器：跨 job 命中 actions/cache（与镜像构建层缓存无关）
 kubectl apply -f deploy/cache.yaml
-#    应用之后还要把 controller 里那两行缓存 env（CACHE_SERVER_URL / CACHE_SERVER_SECRET_FILE）
-#    取消注释再 apply 一次 —— 默认是注释掉的：那个 Secret 只有 cache.yaml 会创建，
-#    没应用它却设了 SECRET_FILE，controller 会因读不到文件**直接启动失败**。
+#    应用之后，把 controller 里 CACHE_SERVER_URL / CACHE_SERVER_SECRET 两行取消注释再 apply 一次；
+#    密钥值与 cache ConfigMap 里的 external_secret 保持一致。
+#    不应用 cache.yaml 就不要打开这两行，否则 job 里的 actions/cache 会连不上缓存服务。
 ```
 
 > **集群级清单里写死了 `namespace: gitea-runner-controller`**（ServiceAccount/Role/Deployment 等处）。
@@ -62,9 +62,17 @@ kubectl apply -f deploy/cache.yaml
 
 ```yaml
 pools:
-  - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
+  - labels:
+      - self-hosted
+      - linux
+      - x64
+      - ubuntu-latest
+      - ubuntu-24.04
     image: ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest
-    resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
+    resources:
+      cpu: '2'
+      memory: 4Gi
+      ephemeralStorage: 10Gi
     slots: 2
     timeout: 1h
 ```
@@ -85,9 +93,12 @@ job Pod 要访问三类地址：**Gitea**（拉代码）、**controller 的 faca
 
 ```yaml
 # controller 的 env（示例见 deploy/*/all.yaml 的注释）
-- { name: HTTP_PROXY,  value: "http://proxy.example.com:3128" }
-- { name: HTTPS_PROXY, value: "http://proxy.example.com:3128" }
-- { name: NO_PROXY,    value: "10.0.0.0/8,.svc.cluster.local,.example.com" }
+- name: HTTP_PROXY
+  value: "http://proxy.example.com:3128"
+- name: HTTPS_PROXY
+  value: "http://proxy.example.com:3128"
+- name: NO_PROXY
+  value: "10.0.0.0/8,.svc.cluster.local,.example.com"
 ```
 
 平台会**自动**把 `localhost,127.0.0.1,::1,kubernetes.default.svc,.svc,.svc.cluster.local` 以及

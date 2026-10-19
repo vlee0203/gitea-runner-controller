@@ -23,7 +23,7 @@ container/
   controller.Dockerfile   controller 镜像（编译 + distroless）
   runner.Dockerfile       执行环境镜像（工具链 + stock gitea-runner + `docker` 替身）
   docker.sh               `docker` 替身（把标准 docker 命令转给同 Pod 的 kaniko 容器）
-deploy/                   namespace / cluster 两套清单 + 可选的共享缓存
+deploy/                   namespace / cluster 两套清单 + 可选的 actions/cache 共享服务
 docs/                     本文档
 ```
 
@@ -39,8 +39,10 @@ GOWORK=off go vet ./...
 
 ## 镜像与 CI
 
-`.github/workflows/build.yaml`（push 到 main、且只在这些路径变化时触发：`container/` `cmd/` `internal/` `go.mod` `go.sum` 与 workflow 自身；也可手动触发）构建并推送两个镜像，**每个都是
-`linux/amd64` + `linux/arm64` 双架构**：
+GitHub 侧用 `.github/workflows/build.yaml`，Gitea 侧用 `.gitea/workflows/{build,release}.yaml`。两者都是
+push 到 main（路径过滤相同：`container/` `cmd/` `internal/` `go.mod` `go.sum` 与 workflow 自身；也可手动触发），
+构建并推送 controller / runner 两个镜像。**GitHub 版是 `linux/amd64` + `linux/arm64` 双架构；Gitea 版只构建
+`linux/amd64`**（集群没有 binfmt/QEMU）：
 
 | 镜像 | 来源 | 标签 |
 | --- | --- | --- |
@@ -54,11 +56,14 @@ GOWORK=off go vet ./...
 `TARGETOS/TARGETARCH`），不需要 QEMU 跑编译；两个基础镜像（`golang` / `distroless`、以及 runner 的
 `docker.gitea.com/runner` 与 `runner-images`）本身都发布双架构。
 
-该 workflow 本身用标准 GitHub 写法（`checkout` + `setup-qemu` + `setup-buildx` + `login` + `metadata` +
-`build-push`），**也能原样跑在 Gitea 上**（只需把 registry 与登录凭据换成 Gitea 的），见
-[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。**但多平台那一步在 Gitea 侧跑不了**：
-集群里没有 binfmt/QEMU 注册且安全基线不允许特权，平台的 `docker` 替身会明确报错而不是静默降级
-（自举构建请在 GitHub 上跑，或临时把 `platforms` 改成单架构）。
+GitHub 版用标准 GitHub 写法（`checkout` + `setup-qemu` + `setup-buildx` + `login` + `metadata` +
+`build-push`）。Gitea 版在 `.gitea/workflows/` 下，差异只有三处：registry/登录凭据换成
+`secrets.REGISTRY/REG_USER/REG_PASS`、去掉 `setup-qemu-action`、`platforms` 只留 `linux/amd64`。
+**多平台在 Gitea 侧跑不了**：集群没有 binfmt/QEMU 注册且安全基线不允许特权，替身会明确报错而不是静默降级。
+Gitea 默认先扫描 `.gitea/workflows`，该目录存在时不会扫描 `.github/workflows`。
+
+构建层缓存默认关闭；Gitea 版目前没写 `cache-from/cache-to`。要开就在 build-push 步骤加
+`type=registry,ref=…`，见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。
 
 ## 改动时注意
 

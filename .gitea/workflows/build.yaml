@@ -36,6 +36,8 @@ env:
 #   * registry 用 secrets.REGISTRY（只写主机名），登录用 PAT —— Gitea 的 GITEA_TOKEN
 #     不能推 OCI 镜像（官方文档明确）。
 #   * Gitea 默认先扫描 .gitea/workflows；该目录存在时 .github/workflows 整个不扫描。
+#   * 构建层缓存默认关闭；要开就在 build-push 步骤加 cache-from/cache-to:
+#     type=registry,ref=<镜像仓库>/cache（见 docs/usage/image-building.zh-cn.md）。
 
 jobs:
   controller:

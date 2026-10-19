@@ -22,6 +22,9 @@ weight: 50
 | `docker build` 成功但 `docker push` 报"没有可推送的镜像" | `push` 与 `build` 不在同一个 job（替身的构建参数记录在 Pod 内的临时文件里） | 把 build 与 push 放在同一个 job |
 | job 里下载/构建/`uses:` 卡住或超时（外网要走代理的环境） | 代理没配到 Pod 上，或 `NO_PROXY` 把集群内地址也送进了代理 | controller 上设 `HTTP_PROXY/HTTPS_PROXY/NO_PROXY`（平台会注入 Pod 并自动追加集群内地址）；action 也可改从 Gitea 取（`[actions] DEFAULT_ACTIONS_URL = self`） |
 | 注册失败 / worker 起不来 | 注册令牌失效（被重置）、Secret 名不对、或 state Secret 不可写 | 看 controller 日志首几行；注册令牌重置后要同步更新 Secret |
+| 构建日志只有 `>>>` 行 | 这是正常过滤：只显示 Dockerfile 指令头、RUN 输出、`[cache] hit/miss` 与告警/错误 | `>>> [<elapsed>]` 里的数字就是该步耗时；kaniko 内部流水不显示 |
+| 写了 `cache-from/cache-to: type=gha` | 本平台没有 BuildKit，`gha` / `local` 后端无法映射 | 日志会告警并禁用缓存；改用 `type=registry,ref=<仓库>` |
+| `go build` 要跑好几分钟且忽快忽慢 | 每个 job 的 kaniko 容器都是新的，GOCACHE 为空；编译受池 CPU 与节点负载影响 | `kubectl top node` / `kubectl top pod -n <ns>` 看争用；必要时把两个 job 串行化或提高池 CPU |
 
 ## 收集现场
 

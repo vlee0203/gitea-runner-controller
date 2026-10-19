@@ -37,7 +37,7 @@ kubectl -n <ns> create secret generic gitea-runner-controller-registration --fro
 
 # 2. 按需改清单里的 GITEA_INSTANCE_URL / CONTROLLER_URL / pools.yaml，然后应用
 kubectl apply -f deploy/namespace/all.yaml     # 用户级；集群级用 deploy/cluster/all.yaml
-kubectl apply -f deploy/cache.yaml             # 可选：共享缓存（跨 job 命中 actions/cache）
+kubectl apply -f deploy/cache.yaml             # 可选：共享 actions/cache（与镜像构建层缓存无关）
 ```
 
 跑一个最小 workflow 验收：

@@ -16,8 +16,9 @@ weight: 42
 `continue-on-error`、`timeout-minutes`、`concurrency` + `cancel-in-progress`、可复用 workflow（`workflow_call`）、
 `rerun`、取消 job、多池并发、`workflow_dispatch`（含 inputs）。
 
-在 workflow 里构建镜像：`docker login/build/push` 与官方 `docker/setup-qemu-action`、`setup-buildx-action`、
-`login-action`、`metadata-action`、`build-push-action` 均可原样使用，见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。
+在 workflow 里构建镜像：`docker login/build/push` 与官方 `docker/setup-buildx-action`、`login-action`、
+`metadata-action`、`build-push-action` 可原样使用；`setup-qemu-action` 会被跳过并告警（单平台构建不需要它）。
+见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。
 
 > 注意：Gitea 文档把 `concurrency` / `timeout-minutes` / `continue-on-error` 列在"忽略"里，**实测是生效的**
 > （它们是 runner 侧实现，文档偏保守/过时）。`environment:` 被接受但无语义（Gitea 无该特性）。
@@ -51,3 +52,9 @@ weight: 42
 - **没有 runner 能接的 job 一直排队**（GitHub 是 24h 后自动失败），且 Gitea 没有 cancel run 的 API。
 - **workflow 语法错是静默失败**：run 会被创建但零 job、零日志；先本地 parse 一遍 YAML。
 - **自带 actions 的下载源**：Gitea 的 `DEFAULT_ACTIONS_URL` 默认指向 github（可用 `self` 指向自身）。
+- **workflow 目录优先级**：Gitea 先扫描 `.gitea/workflows`，该目录存在时**不再扫描** `.github/workflows`
+  （源码 `listWorkflowsInDirs` 取第一个存在的目录，不合并）。同一个仓想跑哪一套，用目录决定。
+- **构建层缓存**：BuildKit 的 `cache-from/cache-to` 只有 `type=registry,ref=…` 能映射到 kaniko；
+  `type=gha`/`type=local` 不支持（告警并禁用缓存）。平台默认不缓存，需 workflow 显式开启。
+- **两套缓存**：`actions/cache` 走共享 cache-server（文件/目录 tar 包）；镜像构建层缓存走 registry 的
+  OCI 层缓存，两者互不相通。

@@ -23,7 +23,12 @@ weight: 31
 - uses: docker/login-action@v3
 - uses: docker/metadata-action@v5
 - uses: docker/build-push-action@v6
-  with: { context: ., file: ./Dockerfile, platforms: linux/amd64, push: true, tags: ... }
+  with:
+    context: .
+    file: ./Dockerfile
+    platforms: linux/amd64
+    push: true
+    tags: ...
 ```
 
 ## 平台是怎么接住的
@@ -45,7 +50,18 @@ buildah 都要挂载文件系统，没有 `CAP_SYS_ADMIN` 干不了）。唯一�
 替身为了配合官方 action 还提供：裸 `docker buildx`（它们用它判断 buildx 可用性）、`buildx inspect`
 （返回其逐行解析的表格）、`context inspect`（JSON）、`version/info --format`、`image inspect`/`images`、
 `pull`（跳过+告警）、`run`（**只**跳过 binfmt/QEMU 注册调用，其它明确报错）、
-`--metadata-file`/`--iidfile`（从 kaniko 日志的 `Pushed …@sha256:` 取 digest，写成 action 读的元数据）。
+`--metadata-file`/`--iidfile`（用 kaniko 的 `--digest-file` 写 action 读的 digest 元数据）。
+
+## 构建日志
+
+job 日志只显示：
+
+- `>>> [<elapsed>] RUN/COPY/…`：Dockerfile 指令头；`<elapsed>` 是 kaniko 的耗时（秒数或时间戳），可直接看出每步耗时
+- RUN 命令的原始输出（`go build` 这类成功时本身无输出）
+- `[cache] hit` / `[cache] miss: RUN …`
+- 告警与错误
+
+kaniko 的 `Retrieving image manifest`、`Unpacking rootfs`、`Taking snapshot` 等内部流水被过滤掉。
 
 ## 代理
 
@@ -75,7 +91,19 @@ error building image: Get "https://docker.gitea.com/v2/": proxyconnect tcp: dial
 | **多平台构建**（`platforms: linux/amd64,linux/arm64`） | 做不到：需要 binfmt/QEMU 模拟，而注册模拟器要 `docker run --privileged`，安全基线不允许。平台会**明确报错并说明原因**（不静默忽略） |
 | `docker build` + 单独 `docker push` | 能跑，但 kaniko 没有本地镜像库，`push` 会**按同样参数重新构建一次**再推（多个 tag 会一次推完，不会推多个 tag 就构建多遍） |
 | `docker run` / `docker compose` / `services:` / `uses: docker://` | 需要真 daemon，明确报错 |
-| 构建缓存 | `cache-from/to type=gha` 无对应；kaniko 支持 `--cache/--cache-repo`（registry 缓存），当前替身未启用 |
+| 构建层缓存 | 平台默认**关闭**。workflow 写 `cache-from/cache-to: type=registry,ref=<仓库>` 时映射到 kaniko `--cache-repo`；`type=gha`/`type=local` 不支持（告警并禁用缓存）；`no-cache: true` 可关闭。这是 OCI 层缓存，与 `actions/cache` 的 cache-server 是两套 |
+
+显式开启层缓存（`<image>/cache` 只是约定，换成任意可推的仓库也行）：
+
+```yaml
+- uses: docker/build-push-action@v6
+  with:
+    cache-from: type=registry,ref=<registry>/<owner>/<repo>/<image>/cache:latest
+    cache-to: type=registry,ref=<registry>/<owner>/<repo>/<image>/cache:latest,mode=max
+```
+
+层缓存只复用**未变化**的层；源码每变一次，`COPY . .` 和其后的 `RUN go build` 必然重新执行，收益主要在
+依赖下载这类稳定层。首次构建是填充缓存（`[cache] miss`），之后才可能命中。
 
 ## 两个会伪装成"别的问题"的坑
 

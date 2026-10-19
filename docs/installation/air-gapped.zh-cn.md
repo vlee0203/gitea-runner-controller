@@ -58,7 +58,7 @@ done
 
 ### 镜像地址要改的地方
 
-搬完必须把清单/配置里的地址换掉，**四处池镜像 + 三处 controller 配置**：
+搬完必须把清单/配置里的地址换掉，**共 5 处镜像引用（`all.yaml` 4 处 + `cache.yaml` 1 处）**：
 
 | 文件 | 位置 | 换成 |
 | --- | --- | --- |
@@ -121,6 +121,12 @@ kubectl -n <gitea-ns> set env sts/<gitea> \
 # 或 POST /admin/actions/runners/registration-token
 ```
 
+### 构建 workflow 放哪
+
+Gitea 默认先扫描 `.gitea/workflows`；该目录存在时 `.github/workflows` **不会被执行**。内网用本仓库的
+`.gitea/workflows/{build,release}.yaml`（单架构 amd64、Gitea registry + PAT、无 qemu）。不要指望
+`.github/workflows/build.yaml`：那是 ghcr + 多架构的 GitHub 版，在内网会失败。
+
 ## 四、HTTPS 与证书（内网最容易踩）
 
 先把"谁真的会跟 Gitea 说 TLS"查清楚（核实到代码），因为它决定了要在哪儿装 CA：
@@ -169,13 +175,14 @@ data:
 一个挂载**（三处，缺一不可）：
 
 ```yaml
+      containers:
+        - name: gitea-runner-controller
           env:
             # Go 标准库同时扫这些目录；目录不存在也不影响公网证书（已实测正反对照）
             - name: SSL_CERT_DIR
               value: /etc/ssl/certs:/etc/grc-ca
           volumeMounts:
-            -
-              name: vn-etcvn-grcvn-ca
+            - name: vn-etcvn-grcvn-ca
               mountPath: /etc/grc-ca
               readOnly: true
       volumes:
@@ -184,8 +191,7 @@ data:
           configMap:
             name: <应用的 ConfigMap 名>
             items:
-              -
-                key: vn-etcvn-grcvn-cavn-ca.crt
+              - key: vn-etcvn-grcvn-cavn-ca.crt
                 path: ca.crt
 ```
 
@@ -193,8 +199,10 @@ data:
 即可（清单里有注释行）。这一行只认路径 —— 挂的是 Secret 还是 ConfigMap、key 叫什么名字，它都不关心：
 
 ```yaml
-            # - { name: EXECUTOR_CA_PATH, value: /etc/grc-ca }
-            # - { name: EXECUTOR_CA_PATH, value: /etc/grc-ca/corp-ca.crt }   # 指单个文件也行
+            # - name: EXECUTOR_CA_PATH
+            #   value: /etc/grc-ca
+            # - name: EXECUTOR_CA_PATH
+            #   value: /etc/grc-ca/corp-ca.crt   # 指单个文件也行
 ```
 
 controller 建每个执行 Pod 时都会：
