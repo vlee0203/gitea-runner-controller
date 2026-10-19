@@ -64,7 +64,7 @@ filter_log() {
   # 同时兼容 text 格式（time="..." level=info msg="..."），免得日志格式一变过滤器就失效。
   esc=$(printf '\033')
   sed "s/${esc}\\[[0-9;]*m//g" | awk '
-    function keep(msg) {
+    function keep(msg, ts) {
       if (msg == "Found cached layer") { print "[cache] hit"; return }
       if (msg ~ /^No cached layer found for cmd /) {
         sub(/^No cached layer found for cmd /, "", msg)
@@ -72,12 +72,15 @@ filter_log() {
         return
       }
       if (msg ~ /^(RUN|COPY|ADD|WORKDIR|ARG|ENV|LABEL|FROM|ENTRYPOINT|CMD|HEALTHCHECK|USER|EXPOSE|VOLUME|SHELL|STOPSIGNAL|ONBUILD)( |$)/)
-        print ">>> " msg
+        print ">>> [" ts "] " msg
     }
     /^INFO\[[^]]*\] / {
       msg = $0
       sub(/^INFO\[[^]]*\] /, "", msg)
-      keep(msg)
+      ts = $0
+      sub(/^INFO\[/, "", ts)
+      sub(/\].*/, "", ts)
+      keep(msg, ts)
       next
     }
     /^time="[^"]*" level=info msg="/ {
@@ -85,7 +88,10 @@ filter_log() {
       sub(/^.* msg="/, "", msg)
       sub(/"$/, "", msg)
       gsub(/\\"/, "\"", msg)
-      keep(msg)
+      ts = $0
+      sub(/^time="[^"]*T/, "", ts)
+      sub(/".*/, "", ts)
+      keep(msg, ts)
       next
     }
     { print }
