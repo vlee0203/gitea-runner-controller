@@ -83,7 +83,7 @@ data:
           - x64
           - ubuntu-latest
           - ubuntu-24.04
-        image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-8916a47
+        image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-6b935af
         resources:
           cpu: '2'
           memory: 4Gi
@@ -124,7 +124,7 @@ spec:
       # - name: registry-pull
       containers:
         - name: controller
-          image: ghcr.io/vlee0203/gitea-runner-controller/controller:sha-8916a47
+          image: ghcr.io/vlee0203/gitea-runner-controller/controller:sha-6b935af
           imagePullPolicy: IfNotPresent
           resources:
             # requests 与 limits 同值（这类短命工作负载不需要超卖）；ephemeralStorage 必须显式给，
@@ -195,7 +195,7 @@ spec:
             #   value: registry-pull
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
             - name: RUNNER_IMAGE
-              value: 'ghcr.io/vlee0203/gitea-runner-controller/runner:sha-8916a47'
+              value: 'ghcr.io/vlee0203/gitea-runner-controller/runner:sha-6b935af'
             # 出网需要代理时：在 controller 上设这三个（平台会自动注入每个 executor Pod，
             # 并把 Gitea/facade/cache 等集群内地址追加进 NO_PROXY，另自动加 NODE_USE_ENV_PROXY=1）。
             # - name: HTTP_PROXY
@@ -204,7 +204,7 @@ spec:
             #   value: "http://proxy.example.com:3128"
             # - name: NO_PROXY
             #   value: "10.0.0.0/8,192.168.0.0/16,.example.com"
-            # 官方 kaniko 镜像：job 里出现 docker build/push/login（或 docker/* 官方 action）时，
+            # 官方 kaniko 镜像：job 里出现 docker build/buildx（或 docker/* 官方 action）时，
             # 该 job 的 Pod 里会多加一个待命的 kaniko 容器，runner 容器里的 `docker` 替身把构建交给它
             # （kaniko 必须作为它自己的镜像运行）。不配则不支持 workflow 内构建镜像。
             - name: KANIKO_IMAGE
