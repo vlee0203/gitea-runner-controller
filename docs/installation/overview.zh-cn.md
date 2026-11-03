@@ -55,6 +55,9 @@ kubectl apply -f deploy/cache.yaml
 #    不应用 cache.yaml 就不要打开这两行，否则 job 里的 actions/cache 会连不上缓存服务。
 ```
 
+> 清单默认用 `:latest`，CI 在 main 上会持续更新它；**线上滚动更新/回滚时把 `pools.yaml` 的池 image、
+> controller image、`RUNNER_IMAGE` 三处一起钉到同一次 CI 的 `sha-<commit>`**，不要用 latest。
+
 > **集群级清单里写死了 `namespace: gitea-runner-controller`**（ServiceAccount/Role/Deployment 等处）。
 > 部署到别的命名空间时记得一并替换，否则资源和 Pod 会落到 `gitea-runner-controller` 这个 ns 里。
 
@@ -68,7 +71,7 @@ pools:
       - x64
       - ubuntu-latest
       - ubuntu-24.04
-    image: ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest
+    image: ghcr.io/vlee0203/gitea-runner-controller/runner:latest
     resources:
       cpu: '2'
       memory: 4Gi

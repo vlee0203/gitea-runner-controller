@@ -22,8 +22,8 @@ permissions:
 # 镜像标签规则（docker/metadata-action）：
 #   main 上         → sha-<短 commit sha> + latest
 #   打 vX.Y.Z tag   → sha-<短 commit sha> + vX.Y.Z
-# sha- 前缀那个是**不可变**的：部署清单/Sealos 模板钉它（别钉 latest），
-# 换版本时改一处即可，内网 skopeo copy 也能连 tag 一起带走。
+# sha- 前缀那个是**不可变**的：部署模板默认用 latest，线上滚动更新改钉这个 sha
+# （别用 latest），内网 skopeo copy 也能连 tag 一起带走。
 #
 # 多架构：linux/amd64 + linux/arm64。基础镜像都同时发布两个架构，构建阶段在
 # builder 平台上交叉编译（不需要 QEMU 跑 Go），所以多出的一架构几乎不花时间。

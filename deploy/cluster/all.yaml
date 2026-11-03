@@ -73,8 +73,9 @@ data:
   # linux/x64/ubuntu-24.04 这些 label。**不要**声明 ubuntu-22.04：本池镜像是 Ubuntu 24.04
   # （runner-images 带 LSB_RELEASE=24.04），声明了不会报错，只会静默地按错误环境跑。
   # linux/x64 只挂通用池：否则 runs-on: [self-hosted, linux] 这类通用写法会落到专用池（槽位更少）上。
-  # 镜像钉的是不可变标签 sha-<commit>（CI 每次构建产出）：换版本时改这里的两处 + 下面
-  # 容器 image 与 RUNNER_IMAGE 那一处，三处保持一致。
+  # 模板默认用 :latest（CI 在 main 上同时产出 :latest 与不可变 :sha-<commit>）。
+  # 线上滚动更新不要用 latest：把池 image、下面容器 image、RUNNER_IMAGE 三处
+  # 一起改成同一次 CI 的 sha-<commit>（三处必须一致）。
   pools.yaml: |
     pools:
       # labels 是「承诺」：声明了就要按那个环境跑，runs-on 命中是整串匹配
@@ -84,7 +85,7 @@ data:
           - x64
           - ubuntu-latest
           - ubuntu-24.04
-        image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-30e462c
+        image: ghcr.io/vlee0203/gitea-runner-controller/runner:latest
         resources:
           cpu: '2'
           memory: 4Gi
@@ -126,8 +127,7 @@ spec:
       # - name: registry-pull
       containers:
         - name: controller
-          image: ghcr.io/vlee0203/gitea-runner-controller/controller:sha-30e462c
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/vlee0203/gitea-runner-controller/controller:latest
           resources:
             # requests 与 limits 同值（这类短命工作负载不需要超卖）；ephemeralStorage 必须显式给，
             # 否则会被命名空间 LimitRange 的默认值（usw 实测 100Mi）注入，写满即被驱逐
@@ -195,7 +195,7 @@ spec:
             #   value: registry-pull
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
             - name: RUNNER_IMAGE
-              value: 'ghcr.io/vlee0203/gitea-runner-controller/runner:sha-30e462c'
+              value: 'ghcr.io/vlee0203/gitea-runner-controller/runner:latest'
             # 出网需要代理时：在 controller 上设这三个（平台会自动注入每个 executor Pod，
             # 并把 Gitea/facade/cache 等集群内地址追加进 NO_PROXY，另自动加 NODE_USE_ENV_PROXY=1）。
             # - name: HTTP_PROXY

@@ -54,7 +54,6 @@ spec:
       #   - name: registry-pull
       containers:
         - name: cache
-          imagePullPolicy: IfNotPresent
           resources:
             # requests 与 limits 同值（这类短命工作负载不需要超卖）；ephemeralStorage 必须显式给，
             # 否则会被命名空间 LimitRange 的默认值（usw 实测 100Mi）注入，写满即被驱逐
@@ -66,7 +65,7 @@ spec:
               cpu: 500m
               memory: 1Gi
               ephemeral-storage: 1Gi
-          image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-30e462c
+          image: ghcr.io/vlee0203/gitea-runner-controller/runner:latest
           command:
             - /usr/local/bin/gitea-runner
             - cache-server

@@ -18,7 +18,9 @@ weight: 42
 
 在 workflow 里构建镜像：`docker login/build/push` 与官方 `docker/setup-buildx-action`、`login-action`、
 `metadata-action`、`build-push-action` 可原样使用；`setup-qemu-action` 会被跳过并告警（单平台构建不需要它）。
-只做镜像搬运的 `docker pull` + `docker tag` + `docker push` 也支持（由 crane 做 registry copy）。
+只做镜像搬运的 `docker pull` + `docker tag` + `docker push` 也支持（由 crane 做 registry copy）；
+单独的 `docker/login-action` 不会触发 kaniko。登录凭据只在当前 job 有效，login 与 build/push
+分在不同 job 时，build job 必须自己再登录。
 见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。
 
 > 注意：Gitea 文档把 `concurrency` / `timeout-minutes` / `continue-on-error` 列在"忽略"里，**实测是生效的**

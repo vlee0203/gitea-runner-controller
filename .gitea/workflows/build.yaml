@@ -29,7 +29,7 @@ env:
 # 镜像标签规则（docker/metadata-action）：
 #   main 上         → sha-<短 commit sha> + latest
 #   打 vX.Y.Z tag   → sha-<短 commit sha> + vX.Y.Z
-# sha- 前缀那个是**不可变**的：部署清单/Sealos 模板钉它（别钉 latest）。
+# sha- 前缀那个是**不可变**的：部署模板默认 latest，线上滚动更新改钉这个 sha（别用 latest）。
 #
 # 与 .github/workflows/build.yaml 的差异（内网 Gitea）：
 #   * 只构建 linux/amd64 —— 本集群没有 binfmt/QEMU，且安全基线不允许特权容器。

@@ -43,7 +43,7 @@ Pod，用的就是这个池的镜像与资源。
     - x64
     - ubuntu-latest
     - ubuntu-24.04
-  image: ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest
+  image: ghcr.io/vlee0203/gitea-runner-controller/runner:latest
   resources:
     cpu: '2'
     memory: 4Gi

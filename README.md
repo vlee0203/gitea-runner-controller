@@ -60,9 +60,10 @@ jobs:
 | 镜像 | 内容 |
 | --- | --- |
 | `ghcr.io/vlee0203/gitea-runner-controller/controller:latest` | controller（`container/controller.Dockerfile`，distroless） |
-| `ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest` | 执行环境（工具链 + stock gitea-runner + `docker` 替身 + crane） |
+| `ghcr.io/vlee0203/gitea-runner-controller/runner:latest` | 执行环境（工具链 + stock gitea-runner + `docker` 替身 + crane） |
 
-> 部署请钉不可变的 `sha-<短 commit sha>` 标签；`latest` / `ubuntu-latest` 会被下次构建覆盖，只适合临时试用。
+> 部署模板默认用 `:latest`，升级时不用改 tag；CI 同时产出不可变的 `sha-<短 commit sha>`。
+> **线上滚动更新不要用 `latest`**：把池镜像、controller 镜像和 `RUNNER_IMAGE` 一起钉到同一次构建的 sha（`ubuntu-latest` 是历史兼容 tag）。
 
 ## 能力速查
 

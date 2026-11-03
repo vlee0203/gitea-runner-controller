@@ -49,8 +49,9 @@ push 到 main（路径过滤相同：`container/` `cmd/` `internal/` `go.mod` `g
 | `ghcr.io/vlee0203/gitea-runner-controller/controller` | `container/controller.Dockerfile` | `sha-<短 commit sha>`、`latest`（main 上）；打 `vX.Y.Z` tag 时另有 `vX.Y.Z` |
 | `ghcr.io/vlee0203/gitea-runner-controller/runner` | `container/runner.Dockerfile` | 同上，另有历史沿用的 `ubuntu-latest` |
 
-**部署清单钉的是不可变的 `sha-<短 commit sha>` 标签**，不要钉 `latest` / `ubuntu-latest` —— 那些会被下一次构建覆盖；
-标签里 `sha-<短 sha>` 也是不可变的，想用可读一点的写法就换成它。
+部署模板默认用 `:latest`，日常升级不必改 tag；CI 在 main 上同时产出 `latest` 与不可变的
+`sha-<短 commit sha>`。**线上滚动更新不要用 `latest`**：把池镜像、controller 镜像和
+`RUNNER_IMAGE` 三处一起钉到同一次构建的 sha，保证可复现、可回滚。`ubuntu-latest` 是 runner 的历史兼容 tag。
 
 多架构不额外花钱：构建阶段用 `--platform=$BUILDPLATFORM` 在 builder 上交叉编译（Go 目标架构来自
 `TARGETOS/TARGETARCH`），不需要 QEMU 跑编译；两个基础镜像（`golang` / `distroless`、以及 runner 的

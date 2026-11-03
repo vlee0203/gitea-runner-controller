@@ -33,7 +33,7 @@ skopeo login ghcr.io -u <GitHub用户名>
 
 for img in \
   gitea-runner-controller/controller:latest \
-  gitea-runner-controller/runner:ubuntu-latest \
+  gitea-runner-controller/runner:latest \
   osscontainertools/kaniko:v1.28.6-debug
 do
   src=${img%%:*}; tag=${img##*:}
@@ -43,9 +43,9 @@ done
 ```
 
 - `--all` 搬多架构；内网是 amd64 单架构也可以用 `--override-arch amd64` 少搬一半。
-- 想钉住版本就用 workflow 产出的**不可变标签** `sha-<短 commit sha>`（见
-  [开发文档](../advanced/development.zh-cn.md)）：`.../controller:sha-abc123…`，比 `latest` 可复现，
-  内网 `skopeo copy` 也会连 tag 一起带过去。
+- 部署模板默认 `latest`；但离线包和线上发布建议改用 workflow 产出的**不可变标签**
+  `sha-<短 commit sha>`（见[开发文档](../advanced/development.zh-cn.md)）：
+  `.../controller:sha-abc123…` 可复现，内网 `skopeo copy` 也会连 tag 一起带过去。
 - kaniko 的源在 `ghcr.io/osscontainertools/`，前两个在 `ghcr.io/vlee0203/` —— 上面的循环统一落到
   内网仓库的 `gitea-runner-controller/` 目录下，名字取原镜像名（`controller` / `runner` / `kaniko`）。
 - 目标仓库要认证时：建一个拉取凭据，并把清单里**注释掉的** `imagePullSecrets` 与
@@ -62,9 +62,9 @@ done
 
 | 文件 | 位置 | 换成 |
 | --- | --- | --- |
-| `deploy/{namespace,cluster}/all.yaml` | `pools.yaml` 里池的 `image:` | `$REG/gitea-runner-controller/runner:ubuntu-latest` |
+| `deploy/{namespace,cluster}/all.yaml` | `pools.yaml` 里池的 `image:` | `$REG/gitea-runner-controller/runner:latest` |
 | 同上 | 容器 `image:` | `$REG/gitea-runner-controller/controller:latest` |
-| 同上 | env `RUNNER_IMAGE` | `$REG/gitea-runner-controller/runner:ubuntu-latest` |
+| 同上 | env `RUNNER_IMAGE` | `$REG/gitea-runner-controller/runner:latest` |
 | 同上 | env `KANIKO_IMAGE` | `$REG/gitea-runner-controller/kaniko:v1.28.6-debug` |
 | `deploy/cache.yaml`（可选） | 容器 `image:` | 同上 runner 镜像 |
 
@@ -298,9 +298,10 @@ action 下载与 checkout 也走它。只有这两种情况要执行 Pod 自己�
   执行 Pod 侧只填 `EXECUTOR_CA_PATH` 指向**同一个挂载点**，模板里不建第二个对象。
 - **执行 Pod 只在两种情况下需要 CA**（workflow 往自签 registry 推镜像 / 直接访问 Gitea 的 https）；
   正常流量全程只跟集群内的 facade 说明文 http。模板里两处都留注释，由部署时决定。
-- **镜像**：模板里钉不可变引用（`sha-<sha>` 标签或摘要），别钉 `latest`；内网填内网仓库地址。
-- **资源基线**：controller `limits 500m/1Gi`、`requests 50m/100Mi`，`revisionHistoryLimit: 1`，
-  `imagePullPolicy: IfNotPresent`；controller 需要 k8s API，靠
+- **镜像**：模板默认 `latest`；离线交付/线上发布时改成同一次 CI 的不可变 `sha-<commit>` 标签（或摘要），
+  并同步池 image、controller image、`RUNNER_IMAGE` 三处；内网地址填内网仓库。
+- **资源基线**：controller `limits 500m/1Gi`、`requests 50m/100Mi`，`revisionHistoryLimit: 1`；
+  `latest` 由 K8s 默认按 `Always` 拉取，钉 sha 时可用 `IfNotPresent`。controller 需要 k8s API，靠
   `automountServiceAccountToken: true`（用默认注入的 SA 令牌，不另配投射卷）。
 - 打包成集群镜像：用 sealos-templates 仓库的 `scripts/build-cluster-image.sh <index.yaml> <镜像名>:<tag>`。
 

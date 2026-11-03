@@ -31,6 +31,10 @@ weight: 31
 不同的仓库。要搬全部 tag：`docker pull --all-tags $SRC_IMAGE` + `docker push --all-tags $DST_IMAGE`。
 内网 HTTP registry 与构建时一样，引用写成 `http://host/...`（替身会去掉协议并给 crane 加 `--insecure`）。
 
+`docker/login-action` 单独用在纯搬运 job 里也可以，它只调用 `docker login`，不会触发 kaniko。
+但 Docker 凭据是 **job 级**的：login 和 build/push 必须放在同一个 job；放到不同 job 时，build job
+需要自己再登录一次，否则 push 会 401。
+
 官方 docker action 也照原样可用（已实测跑通）：
 
 ```yaml
@@ -128,6 +132,6 @@ error building image: Get "https://docker.gitea.com/v2/": proxyconnect tcp: dial
 - **`ephemeralStorage` 不足 → 构建中途被驱逐**：kaniko 解包基础镜像+打快照需要 GB 级临时空间；
   池里没写、命名空间有 LimitRange 默认值（常见 100Mi）时，表现为 job 跑到一半被 **cancelled**，
   事件里写着 `Container kaniko exceeded its local ephemeral storage limit`。池里显式给大即可。
-- **池镜像 tag 可变 + 默认拉取策略 → 改了镜像没生效**：`runner:ubuntu-latest` 这类可变 tag 下，
+- **池镜像 tag 可变 + 默认拉取策略 → 改了镜像没生效**：`runner:latest` 这类可变 tag 下，
   `IfNotPresent` 会让 Pod 一直用节点上缓存的旧镜像（症状：新加的能力"看不见"）。平台的 executor Pod
-  已强制 `PullAlways`；如果你自己加了别的池镜像，注意这一点。
+  已强制 `PullAlways`；模板里的 `latest` 因此能生效，线上要可复现则把三处镜像钉到 sha。
