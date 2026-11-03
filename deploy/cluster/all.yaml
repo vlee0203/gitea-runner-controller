@@ -204,7 +204,7 @@ spec:
             #   value: "http://proxy.example.com:3128"
             # - name: NO_PROXY
             #   value: "10.0.0.0/8,192.168.0.0/16,.example.com"
-            # 官方 kaniko 镜像：job 里出现 docker build/buildx（或 docker/* 官方 action）时，
+            # 官方 kaniko 镜像：job 里出现 docker build/buildx（或 docker/build-push-action）时，
             # 该 job 的 Pod 里会多加一个待命的 kaniko 容器，runner 容器里的 `docker` 替身把构建交给它
             # （kaniko 必须作为它自己的镜像运行）。不配则不支持 workflow 内构建镜像。
             - name: KANIKO_IMAGE

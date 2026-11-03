@@ -360,7 +360,11 @@ func needsImageBuild(payload []byte, jobKey string) bool {
 		return false
 	}
 	for _, step := range job.Steps {
-		if strings.HasPrefix(step.Uses, "docker/") {
+		// Only the official actions that actually build need kaniko. login / metadata /
+		// setup-qemu / setup-buildx alone are used by registry-copy jobs too.
+		if strings.HasPrefix(step.Uses, "docker/build-push-action") ||
+			strings.HasPrefix(step.Uses, "docker/bake-action") ||
+			strings.HasPrefix(step.Uses, "docker/buildx-action") {
 			return true
 		}
 		for _, marker := range []string{"docker build", "docker buildx", "kaniko/executor"} {

@@ -17,7 +17,7 @@ jobs:
       - run: docker build -t x .
       - run: docker push x
 `, "b", true},
-		{"官方 action", `
+		{"官方 build action", `
 jobs:
   b:
     runs-on: ubuntu-latest
@@ -26,6 +26,17 @@ jobs:
       - uses: docker/build-push-action@v6
         with: { push: true }
 `, "b", true},
+		{"单独 docker login action 不触发构建", `
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with: { registry: registry.local, username: u, password: p }
+      - run: docker pull registry.local/src:v1
+      - run: docker tag registry.local/src:v1 registry.local/dst:v1
+      - run: docker push registry.local/dst:v1
+`, "copy", false},
 		{"kaniko 写法", `
 jobs:
   b:
