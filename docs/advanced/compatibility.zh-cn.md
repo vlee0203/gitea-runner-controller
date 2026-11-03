@@ -18,6 +18,7 @@ weight: 42
 
 在 workflow 里构建镜像：`docker login/build/push` 与官方 `docker/setup-buildx-action`、`login-action`、
 `metadata-action`、`build-push-action` 可原样使用；`setup-qemu-action` 会被跳过并告警（单平台构建不需要它）。
+只做镜像搬运的 `docker pull` + `docker tag` + `docker push` 也支持（由 crane 做 registry copy）。
 见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。
 
 > 注意：Gitea 文档把 `concurrency` / `timeout-minutes` / `continue-on-error` 列在"忽略"里，**实测是生效的**
@@ -40,7 +41,7 @@ weight: 42
 | --- | --- | --- |
 | `container:` / `services:` / `uses: docker://` | runner 以 **host 模式**运行且集群命名空间禁特权 → 没有 docker daemon | 领到 task 后**快速失败**并把原因写进 job 日志（不静默） |
 | `docker run` / `docker compose` | 同上 | `docker` 替身明确报错 |
-| **多平台构建**（`platforms: linux/amd64,linux/arm64`） | 需要 binfmt/QEMU 模拟，而注册模拟器要 `docker run --privileged`（安全基线不允许）；交叉编译也绕不过（需要 per-stage platform，kaniko 不支持；且 node 这类语言必须有真 arm64 执行环境） | 明确报错：`多平台构建（--platform=…）本平台做不到…` |
+| **多平台构建**（`platforms: linux/amd64,linux/arm64`） | 需要 binfmt/QEMU 模拟，而注册模拟器要 `docker run --privileged`（安全基线不允许）；交叉编译也绕不过（需要 per-stage platform，kaniko 不支持；且 node 这类语言必须有真 arm64 执行环境） | 明确报错：`multi-platform build (...) is unsupported ...` |
 | `windows-*` / `macos-*` | runner 是 Linux 进程 | 没有 runner 能接 → 一直排队 |
 
 多平台要支持只有两条前置（都在平台之外）：**节点上注册 binfmt**（装 qemu-user-static + systemd-binfmt，

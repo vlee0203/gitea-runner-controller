@@ -288,8 +288,9 @@ cd /opt/grc
 TOKEN=$(cat /etc/grc/` + CapabilityKey + `)
 /opt/grc/gitea-runner register --instance "$CONTROLLER_URL" --token "$TOKEN" \
   --name "$GITEA_RUNNER_NAME" --labels "$GITEA_RUNNER_LABELS" --ephemeral --no-interactive $CFG
-# docker 替身放进 PATH（injectRunner 池的镜像里没有它）
+# docker 替身及其 registry copy 工具放进 PATH（injectRunner 池的镜像里没有它们）
 [ -x /opt/grc/docker ] && cp /opt/grc/docker /usr/local/bin/docker 2>/dev/null || true
+[ -x /opt/grc/crane ] && cp /opt/grc/crane /usr/local/bin/crane 2>/dev/null || true
 exec /opt/grc/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
 `
 
@@ -297,8 +298,9 @@ exec /opt/grc/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
 // entrypoint above next to it.
 var injectRunnerScript = "cp /usr/local/bin/gitea-runner /opt/grc/gitea-runner" +
 	" && chmod +x /opt/grc/gitea-runner" +
-	// 顺带把 `docker` 替身也带过去：injectRunner 的池子主容器不是 runner 镜像，没有它
+	// 顺带把 `docker` 替身和 crane 带过去：injectRunner 的池子主容器不是 runner 镜像，没有它们
 	" && { cp /usr/local/bin/docker /opt/grc/docker 2>/dev/null && chmod +x /opt/grc/docker || true; }" +
+	" && { cp /usr/local/bin/crane /opt/grc/crane 2>/dev/null && chmod +x /opt/grc/crane || true; }" +
 	" && cat > /opt/grc/entrypoint.sh <<'GRC_ENTRYPOINT'\n" + injectedEntrypoint + "GRC_ENTRYPOINT\n" +
 	// The chmod must start its own line: a line cannot begin with "&&" after a
 	// heredoc, which is a shell syntax error (that failed the init container and

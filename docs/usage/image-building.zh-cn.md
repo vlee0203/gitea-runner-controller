@@ -15,6 +15,22 @@ weight: 31
 - run: docker push $IMAGE:$TAG
 ```
 
+只做镜像搬运（不构建）也按标准写法：
+
+```yaml
+- run: docker login $SRC_REGISTRY -u '${{ secrets.SRC_USER }}' -p '${{ secrets.SRC_PASS }}'
+- run: docker login $DST_REGISTRY -u '${{ secrets.DST_USER }}' -p '${{ secrets.DST_PASS }}'
+- run: |
+    docker pull $SRC_IMAGE:$TAG
+    docker tag $SRC_IMAGE:$TAG $DST_IMAGE:$TAG
+    docker push $DST_IMAGE:$TAG
+```
+
+`pull` 在 job 里只校验引用并记录来源，`push` 时由 runner 内置的 `crane` 直接从源 registry 复制到
+目标 registry（层不落本地）；`docker login` 会合并多个 registry 的凭据，因此源和目标可以是两个
+不同的仓库。要搬全部 tag：`docker pull --all-tags $SRC_IMAGE` + `docker push --all-tags $DST_IMAGE`。
+内网 HTTP registry 与构建时一样，引用写成 `http://host/...`（替身会去掉协议并给 crane 加 `--insecure`）。
+
 官方 docker action 也照原样可用（已实测跑通）：
 
 ```yaml
@@ -49,7 +65,7 @@ buildah 都要挂载文件系统，没有 `CAP_SYS_ADMIN` 干不了）。唯一�
 
 替身为了配合官方 action 还提供：裸 `docker buildx`（它们用它判断 buildx 可用性）、`buildx inspect`
 （返回其逐行解析的表格）、`context inspect`（JSON）、`version/info --format`、`image inspect`/`images`、
-`pull`（跳过+告警）、`run`（**只**跳过 binfmt/QEMU 注册调用，其它明确报错）、
+`pull`（校验并记录来源，push 时搬运）、`tag`（记录映射）、`run`（**只**跳过 binfmt/QEMU 注册调用，其它明确报错）、
 `--metadata-file`/`--iidfile`（用 kaniko 的 `--digest-file` 写 action 读的 digest 元数据）。
 
 ## 构建日志
@@ -78,7 +94,7 @@ kaniko 的 `Retrieving image manifest`、`Unpacking rootfs`、`Taking snapshot` 
 
 ```
 NO_PROXY=localhost,127.0.0.1,::1,kubernetes.default.svc,.svc,.svc.cluster.local,<gitea>.<ns>,...   ← 平台注入
-[docker] 转交代理设置给 kaniko 容器：HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 NO_PROXY=...
+[docker] level=info msg="build submitted to the kaniko sidecar"
 error building image: Get "https://docker.gitea.com/v2/": proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection refused
 ```
 
@@ -89,6 +105,7 @@ error building image: Get "https://docker.gitea.com/v2/": proxyconnect tcp: dial
 | 边界 | 说明 |
 | --- | --- |
 | **多平台构建**（`platforms: linux/amd64,linux/arm64`） | 做不到：需要 binfmt/QEMU 模拟，而注册模拟器要 `docker run --privileged`，安全基线不允许。平台会**明确报错并说明原因**（不静默忽略） |
+| `docker pull` + `docker tag` + `docker push`（纯搬运） | 支持：`pull` 校验引用并记录，`push` 由 runner 内置的 `crane` 直接 registry-to-registry copy；镜像层不落本地，也不需要 docker daemon |
 | `docker build` + 单独 `docker push` | 能跑，但 kaniko 没有本地镜像库，`push` 会**按同样参数重新构建一次**再推（多个 tag 会一次推完，不会推多个 tag 就构建多遍） |
 | `docker run` / `docker compose` / `services:` / `uses: docker://` | 需要真 daemon，明确报错 |
 | 构建层缓存 | 平台默认**关闭**。workflow 写 `cache-from/cache-to: type=registry,ref=<仓库>` 时映射到 kaniko `--cache-repo`；`type=gha`/`type=local` 不支持（告警并禁用缓存）；`no-cache: true` 可关闭。这是 OCI 层缓存，与 `actions/cache` 的 cache-server 是两套 |

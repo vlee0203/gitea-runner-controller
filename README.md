@@ -60,7 +60,7 @@ jobs:
 | 镜像 | 内容 |
 | --- | --- |
 | `ghcr.io/vlee0203/gitea-runner-controller/controller:latest` | controller（`container/controller.Dockerfile`，distroless） |
-| `ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest` | 执行环境（工具链 + stock gitea-runner + `docker` 替身） |
+| `ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest` | 执行环境（工具链 + stock gitea-runner + `docker` 替身 + crane） |
 
 > 部署请钉不可变的 `sha-<短 commit sha>` 标签；`latest` / `ubuntu-latest` 会被下次构建覆盖，只适合临时试用。
 
@@ -69,7 +69,7 @@ jobs:
 - ✅ `checkout` / `run` / `if` / `needs`+outputs / `matrix` / artifacts / `actions/cache` / secrets / vars /
   `timeout-minutes` / `continue-on-error` / `concurrency` / 可复用 workflow / `workflow_dispatch`
 - ✅ 在 workflow 里构建并推送镜像：`docker login|build|push` 与官方 docker action（内部用 kaniko）；
-  构建日志只显示步骤、RUN 输出与 `[cache]` 状态
+  纯搬运 `docker pull|tag|push` 也支持（内部用 crane）；构建日志只显示步骤、RUN 输出与 `[cache]` 状态
 - ✅ 镜像构建层缓存：默认关闭，workflow 显式写 `cache-from/cache-to: type=registry` 时启用
 - ❌ 需要真 docker daemon 的写法：`container:` / `services:` / `uses: docker://` / `docker run`
 - ❌ 多平台构建（需 binfmt/QEMU，本集群安全基线不允许特权）、`windows-*` / `macos-*`

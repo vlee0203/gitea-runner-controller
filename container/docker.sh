@@ -11,15 +11,45 @@
 # 无 socket，只是待命），本替身通过共享目录把构建请求交给它，再把它的日志流回 job 日志。
 # 共享目录与请求协议见 internal/executor（sidecar 侧）与本文件末尾（客户端侧）。
 #
-# 覆盖：login、build、buildx build、push、tag、version、info。
-# 不覆盖（需要真 daemon，明确报错而不是静默失败）：run、compose、pull、exec、save、manifest …
+# 覆盖：login、build、buildx build、push、tag、pull、version、info。
+# 纯 registry 搬运（pull → tag → push）走 crane，不需要 docker daemon。
+# 不覆盖（需要真 daemon，明确报错而不是静默失败）：run、compose、exec、save、manifest …
 set -eu
 
 SHARED=${GRC_SHARED:-/shared}          # 与 kaniko 容器共享的目录（由 controller 挂载）
 CREDS="$SHARED/kaniko/.docker/config.json"
 SPEC=/tmp/.grc-last-build              # 最近一次 build 的参数，push 时复用
-log() { echo "[docker] $*" >&2; }
-die() { log "$*"; exit 1; }
+COPY_MAP="$SHARED/copy/map"            # pull/tag 记录，push 时用 crane 做 registry copy
+# Shim logs are English logfmt on stderr: [docker] level=info|error msg="...".
+log() { printf '[docker] level=info msg="%s"\n' "$*" >&2; }
+die() { printf '[docker] level=error msg="%s"\n' "$*" >&2; exit 1; }
+
+# 记录 target -> source 的搬运关系；第三列表示该引用是否使用明文 HTTP。
+copy_record() {
+  mkdir -p "$(dirname "$COPY_MAP")"
+  printf '%s\t%s\t%s\n' "$1" "$2" "${3:-0}" >> "$COPY_MAP"
+}
+
+copy_source() {
+  [ -f "$COPY_MAP" ] || return 0
+  awk -F '\t' -v target="$1" '$1 == target { source = $2 } END { if (source != "") print source }' "$COPY_MAP"
+}
+
+copy_insecure() {
+  [ -f "$COPY_MAP" ] || return 0
+  awk -F '\t' -v target="$1" '$1 == target { value = $3; found = 1 } END { if (found) print value }' "$COPY_MAP"
+}
+
+copy_ref() {
+  [ -n "$(command -v crane || true)" ] || die "crane is missing from the runner image; registry copy is unavailable"
+  mkdir -p "$SHARED/kaniko/.docker"
+  insecure=""
+  all=""
+  [ "$3" = 1 ] && insecure="--insecure"
+  [ "${4:-0}" = 1 ] && all="--all-tags"
+  # docker login writes the kaniko config; crane reads the same credential store.
+  DOCKER_CONFIG="$SHARED/kaniko/.docker" crane $insecure copy $all "$1" "$2"
+}
 
 # 注册表地址带协议（`https://gitea.corp.local`）是非常常见的写法 —— docker 自己会报
 # invalid reference format，而 kaniko 更阴：它把 "https" 当成 registry 主机名，报
@@ -27,7 +57,7 @@ die() { log "$*"; exit 1; }
 # 这里统一剥掉协议并说一声：镜像引用与凭据里的键都只写主机名。
 strip_scheme() {
   case "$1" in
-    *://*) log "镜像引用不该带协议，已去掉：$1 -> ${1#*://}"; printf '%s' "${1#*://}" ;;
+    *://*) log "image reference must not include a scheme; normalized $1 -> ${1#*://}"; printf '%s' "${1#*://}" ;;
     *)     printf '%s' "$1" ;;
   esac
 }
@@ -51,9 +81,9 @@ handle_cache_arg() {
     *type=registry*)
       case "$v" in
         *ref=*) r=${v#*ref=}; r=${r%%,*}; GRC_CACHE_REPO=$(repo_of "$r") ;;
-        *)      GRC_CACHE_UNSUPPORTED=1; log "缓存参数缺少 ref，已忽略：$v" ;;
+        *)      GRC_CACHE_UNSUPPORTED=1; log "cache option is missing ref; ignoring $v" ;;
       esac ;;
-    *) GRC_CACHE_UNSUPPORTED=1; log "缓存参数 $v 本平台不支持（仅 type=registry 可映射），本次不启用缓存" ;;
+    *) GRC_CACHE_UNSUPPORTED=1; log "cache option $v is unsupported here (only type=registry maps); caching disabled for this build" ;;
   esac
 }
 
@@ -147,16 +177,16 @@ parse_build() {
   # 构建请求是交给**另一个容器**执行的，相对路径在那里没有意义 → 一律转绝对路径
   GRC_CTX=$(cd "$GRC_CTX" && pwd)
   [ -n "$GRC_FILE" ] || GRC_FILE="$GRC_CTX/Dockerfile"
-  [ -z "$GRC_IGNORED" ] || log "忽略 kaniko 无对应物的参数：$GRC_IGNORED"
+  [ -z "$GRC_IGNORED" ] || log "ignoring options with no kaniko equivalent: $GRC_IGNORED"
   case "$GRC_PLATFORM" in
-    *,*) die "多平台构建（--platform=$GRC_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台（多平台需要 binfmt/QEMU 模拟，本集群安全基线不允许特权）" ;;
+    *,*) die "multi-platform build (--platform=$GRC_PLATFORM) is unsupported: kaniko builds one platform at a time and binfmt/QEMU requires privileges" ;;
   esac
   printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "$GRC_ARGS" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" "$GRC_LABELS" "$GRC_NOCACHE" "$GRC_CACHE_REPO" "$GRC_CACHE_UNSUPPORTED" > "$SPEC"
 }
 
 # 把一次构建（GRC_* + GRC_DEST）交给 kaniko 容器，并把它的输出流回来
 submit() {
-  [ -d "$SHARED" ] || die "这个 job 里没有 kaniko 容器（$SHARED 不存在）：请让平台把该 job 识别为构建任务"
+  [ -d "$SHARED" ] || die "kaniko sidecar is not available in this job ($SHARED is missing); the job must be recognized as a build job"
   dir="$SHARED/req/$$-$(date +%s)"
   meta=""; iid=""
   for a in ${GRC_META:+"$GRC_META"}; do meta=$a; done
@@ -220,7 +250,7 @@ submit() {
   done
   [ -n "$merged_no" ] && printf '%s\n' "--build-arg=NO_PROXY=$merged_no" "--build-arg=no_proxy=$merged_no" >> "$dir/args"
   : > "$dir/go"                       # 准备就绪，kaniko 容器可以开工
-  log "构建交给同 Pod 的 kaniko 容器"
+  log "build submitted to the kaniko sidecar"
 
   # 边等边把它的输出过滤后流到 job 日志（只追加，不重打；只输出完整行，
   # 末尾没有换行的那一行在 done 之后补一次）
@@ -270,12 +300,17 @@ case "$cmd" in
         *)                [ -n "$host" ] || host=$1; shift ;;
       esac
     done
-    [ -n "$host" ] || die "login 需要 registry 地址：docker login <host> -u <user> -p <pass>"
+    [ -n "$host" ] || die "login requires a registry host: docker login <host> -u <user> -p <pass>"
     # config.json 的键要与 kaniko 查找时用的主机名一致，带协议会匹配不上凭据
     host=$(strip_scheme "$host")
     mkdir -p "$(dirname "$CREDS")"
-    auth=$(printf '%s:%s' "$user" "$pass" | base64 | tr -d '\n')
-    printf '{"auths":{"%s":{"auth":"%s"}}}' "$host" "$auth" > "$CREDS"
+    if [ -n "$(command -v crane || true)" ]; then
+      # Merge into the existing config so source and target registries can both be used.
+      printf '%s' "$pass" | DOCKER_CONFIG="$SHARED/kaniko/.docker" crane auth login "$host" -u "$user" --password-stdin >/dev/null
+    else
+      auth=$(printf '%s:%s' "$user" "$pass" | base64 | tr -d '\n')
+      printf '{"auths":{"%s":{"auth":"%s"}}}' "$host" "$auth" > "$CREDS"
+    fi
     ;;
 
   build|buildx)
@@ -286,14 +321,14 @@ case "$cmd" in
         "")      printf 'github.com/docker/buildx v0.17.1 (kaniko shim)\n\nUsage: docker buildx [OPTIONS] COMMAND\n' ; exit 0 ;;
         build)  : ;;
         create|use|ls|rm|stop|prune)
-                 log "buildx $sub：本平台没有 buildx builder（构建由 kaniko 完成）"; exit 0 ;;
+                 log "buildx $sub: no buildx builder here; builds run in the kaniko sidecar"; exit 0 ;;
         version) echo "github.com/docker/buildx v0.17.1 (kaniko shim)"; exit 0 ;;
         inspect)
                  # setup-buildx-action 按行解析这张表（键: 值），并读每个 node 的 endpoint。
                  name=default; while [ $# -gt 0 ]; do case "$1" in --builder) shift; name=$1; shift ;; *) shift ;; esac; done
                  printf 'Name:          %s\nDriver:        docker-container\n\nNodes:\nName:          %s0\nEndpoint:      unix:///var/run/docker.sock\nStatus:        running\nBuildkit:      v0.17.1\nPlatforms:     linux/amd64\n' "$name" "$name"
                  exit 0 ;;
-        *)       die "不支持的 buildx 子命令：$sub" ;;
+        *)       die "unsupported buildx subcommand: $sub" ;;
       esac
     fi
     parse_build "$@"
@@ -304,20 +339,56 @@ case "$cmd" in
     ;;
 
   push)
-    ref=${1:-}; [ -n "$ref" ] || die "push 需要镜像名：docker push <ref>"
-    [ -f "$SPEC" ] || die "没有可推送的镜像：本平台没有本地镜像库，push 只能跟在同一个 job 里的 build 之后"
+    all_tags=0
+    ref=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -a|--all-tags) all_tags=1; shift ;;
+        --platform)    shift 2 ;;
+        --platform=*)  shift ;;
+        -*)            shift ;;
+        *)             ref=$1; shift ;;
+      esac
+    done
+    [ -n "$ref" ] || die "push requires an image reference: docker push <ref>"
+    if [ ! -f "$SPEC" ]; then
+      ref=$(strip_scheme "$ref")
+      source=$(copy_source "$ref")
+      [ -n "$source" ] || die "nothing to push: this platform has no local image store; pull/tag first for a registry copy, or run build and push in the same job"
+      insecure=$(copy_insecure "$ref"); insecure=${insecure:-0}
+      log "push $ref: copying from $source with crane"
+      copy_ref "$source" "$ref" "$insecure" "$all_tags"
+      exit 0
+    fi
     { read -r GRC_CTX <&3; read -r GRC_FILE <&3; read -r GRC_ARGS <&3; read -r GRC_TARGET <&3; read -r GRC_PLATFORM <&3; read -r GRC_TAGS <&3; read -r GRC_LABELS <&3; read -r GRC_NOCACHE <&3; read -r GRC_CACHE_REPO <&3; read -r GRC_CACHE_UNSUPPORTED <&3; } 3< "$SPEC" || true
     # 如果 ref 是上次 build 的某个 tag，就把那批 tag 一起推掉（kaniko 一次可推多个 destination）
     case " ${GRC_TAGS:-} " in
       *" $ref "*) GRC_DEST="$GRC_TAGS" ;;
       *)          GRC_DEST="$GRC_TAGS $ref" ;;
     esac
-    log "push $ref：本平台没有本地镜像库，按上次 build 的参数重新构建并推送"
+    log "push $ref: rebuilding with the previous build parameters and pushing"
     submit
     ;;
 
-  tag)   log "tag 已忽略（构建时直接打目标 tag）" ;;
-  logout) log "logout 已忽略（本平台凭据只写在共享目录里的 kaniko config，job 结束随 Pod 一起消失）" ;;
+  tag)
+    refs=""
+    for a in "$@"; do case "$a" in -*) ;; *) refs="$refs $a" ;; esac; done
+    set -- $refs
+    [ $# -ge 2 ] || die "tag requires a source and target: docker tag <source> <target>"
+    source=$1
+    target=$2
+    insecure=0
+    case "$source" in http://*) insecure=1 ;; esac
+    source=$(strip_scheme "$source")
+    target_original=$target
+    target=$(strip_scheme "$target")
+    case "$target_original" in http://*) insecure=1 ;; esac
+    mapped=$(copy_source "$source"); [ -n "$mapped" ] || mapped=$source
+    mapped_insecure=$(copy_insecure "$source"); [ "$mapped_insecure" = 1 ] && insecure=1
+    copy_record "$target" "$mapped" "$insecure"
+    log "tag $source -> $target: recorded for registry copy at push time"
+    ;;
+  logout) log "logout is a no-op: credentials live only in the shared kaniko config and disappear with the pod" ;;
   version|--version)
     case " $* " in
       *--format*) echo "27.0.0" ;;                    # action 里常见：--format '{{.Client.Version}}'
@@ -331,7 +402,34 @@ case "$cmd" in
 
   # 官方 setup-qemu-action 会 pull binfmt 镜像并 run 它注册模拟器。本平台不做多平台模拟
   # （需要 binfmt/qemu → 需要特权，baseline 不许），所以这两步明确跳过并告警，不当成失败。
-  pull)  log "跳过 docker pull $*：本平台没有 docker daemon，镜像拉取由 kaniko 构建时完成" ;;
+  pull)
+    all_tags=0
+    ref=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -a|--all-tags) all_tags=1; shift ;;
+        --platform)    shift 2 ;;
+        --platform=*)  shift ;;
+        -*)            shift ;;
+        *)             ref=$1; shift ;;
+      esac
+    done
+    [ -n "$ref" ] || die "pull requires an image reference: docker pull <ref>"
+    insecure=0
+    case "$ref" in http://*) insecure=1 ;; esac
+    ref=$(strip_scheme "$ref")
+    [ -n "$(command -v crane || true)" ] || die "crane is missing from the runner image; registry copy is unavailable"
+    mkdir -p "$SHARED/kaniko/.docker"
+    inc=""; [ "$insecure" = 1 ] && inc="--insecure"
+    # Validate now so pull fails like Docker would, instead of failing later at push.
+    if [ "$all_tags" = 1 ]; then
+      DOCKER_CONFIG="$SHARED/kaniko/.docker" crane $inc ls "$ref" >/dev/null
+    else
+      DOCKER_CONFIG="$SHARED/kaniko/.docker" crane $inc digest "$ref" >/dev/null
+    fi
+    copy_record "$ref" "$ref" "$insecure"
+    log "pull $ref: recorded; layers will be copied at push time"
+    ;;
 
   # 只读探测类命令：action 常用来取镜像 id / 列表 / 上下文。本平台没有本地镜像库，
   # 给一个形状正确的空/占位结果，让它们不至于因此中断（它们本来也只是探测）。
@@ -342,7 +440,7 @@ case "$cmd" in
       inspect)
         ref=${1:-unknown}
         printf '[{"Id":"sha256:%064d","RepoTags":["%s"],"Architecture":"amd64","Os":"linux","Config":{}}]' 0 "$ref" ;;
-      *) die "不支持的 docker image 子命令：$sub" ;;
+      *) die "unsupported docker image subcommand: $sub" ;;
     esac ;;
   inspect)
     ref=${1:-unknown}
@@ -365,11 +463,11 @@ case "$cmd" in
         # setup-qemu-action 会把这条命令的**输出当 JSON 解析**（取已注册的模拟器列表），
         # 所以这里不能只打日志：给一份形状正确的结果；同时明确告警说模拟器并未真正注册
         # （多平台构建在本集群结构上做不到：binfmt/QEMU 需要特权，安全基线不允许）。
-        log "跳过 docker run $*：本平台不做多平台模拟构建（binfmt/QEMU 需要特权，安全基线不允许）"
+        log "skipping docker run $*: multi-platform emulation needs binfmt/QEMU and privileges, which are not allowed here"
         printf '{"supported":["arm","arm64","amd64"],"emulators":{"arm":{"path":"/usr/bin/qemu-arm"},"arm64":{"path":"/usr/bin/qemu-aarch64"}}}' ;;
       *)
-        die "本平台没有 docker daemon，不支持 docker run（只有 binfmt/QEMU 这类注册步骤会被跳过）" ;;
+        die "docker run is unsupported: this platform has no docker daemon (only binfmt/QEMU registration is skipped)" ;;
     esac ;;
-  "")    printf 'Usage: docker [OPTIONS] COMMAND\n\n(docker shim for this platform: builds run in the pod'"'"'s kaniko container)\nAvailable: login, build, buildx build, push, tag, image inspect, images, context, version, info\n' ;;
-  *)     die "本平台没有 docker daemon，不支持 docker $cmd（可用：login / build / buildx build / push / tag）" ;;
+  "")    printf 'Usage: docker [OPTIONS] COMMAND\n\n(docker shim for this platform: builds run in the pod'"'"'s kaniko container)\nAvailable: login, build, buildx build, push, tag, pull, image inspect, images, context, version, info\n' ;;
+  *)     die "docker $cmd is unsupported: this platform has no docker daemon (available: login / build / buildx build / push / tag / pull)" ;;
 esac
