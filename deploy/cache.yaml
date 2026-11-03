@@ -66,7 +66,7 @@ spec:
               cpu: 500m
               memory: 1Gi
               ephemeral-storage: 1Gi
-          image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-6b935af
+          image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-30e462c
           command:
             - /usr/local/bin/gitea-runner
             - cache-server
