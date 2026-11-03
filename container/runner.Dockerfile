@@ -14,13 +14,16 @@ FROM docker.gitea.com/runner:nightly AS runner
 FROM --platform=$BUILDPLATFORM golang:1.26 AS crane
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go install github.com/google/go-containerregistry/cmd/crane@v0.22.1
+WORKDIR /src
+RUN go mod init crane \
+    && go get github.com/google/go-containerregistry/cmd/crane@v0.22.1 \
+    && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+       go build -trimpath -ldflags "-s -w" -o /out/crane github.com/google/go-containerregistry/cmd/crane
 
 FROM docker.gitea.com/runner-images:ubuntu-latest
 COPY --from=runner /usr/local/bin/gitea-runner /usr/local/bin/gitea-runner
 COPY --from=runner /usr/local/bin/run.sh /usr/local/bin/run.sh
-COPY --from=crane /go/bin/crane /usr/local/bin/crane
+COPY --from=crane /out/crane /usr/local/bin/crane
 
 # `docker` 替身：把标准 docker 命令转给同一个 Pod 里的 kaniko 容器（见 container/docker.sh）。
 # 它自己不构建 —— 本平台没有任何 docker daemon，kaniko 又必须作为它自己的镜像运行。
