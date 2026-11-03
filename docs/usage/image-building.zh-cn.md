@@ -55,8 +55,8 @@ buildah 都要挂载文件系统，没有 `CAP_SYS_ADMIN` 干不了）。唯一�
 
 所以流程是：
 
-1. controller 读 workflow，判断这个 job 要构建镜像（出现 `docker build/buildx/push/login`、
-   `docker/*` 官方 action、或直接调 kaniko）；
+1. controller 读 workflow，判断这个 job 要构建镜像（出现 `docker build/buildx`、
+   `docker/*` 官方 action、或直接调 kaniko；纯 `login/pull/tag/push` 不触发）；
 2. 该 job 的 Pod 里**多一个容器**，跑**官方 kaniko 镜像**（待命；无特权、无 daemon、无 socket；
    仍然是"每 job 一个一次性 Pod"）；
 3. runner 容器里的 **`docker` 替身**（`container/docker.sh`）把标准 docker 命令转成对那个容器的请求

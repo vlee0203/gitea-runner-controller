@@ -16,10 +16,11 @@
 # 不覆盖（需要真 daemon，明确报错而不是静默失败）：run、compose、exec、save、manifest …
 set -eu
 
-SHARED=${GRC_SHARED:-/shared}          # 与 kaniko 容器共享的目录（由 controller 挂载）
-CREDS="$SHARED/kaniko/.docker/config.json"
+SHARED=${GRC_SHARED:-/shared}          # 与 kaniko 容器共享的目录（仅构建型 job 挂载）
+STATE=${GRC_SHARED:-${HOME:-/tmp}/.grc-docker}  # 登录凭据与 copy 映射；纯搬运 job 用本地状态
+CREDS="$STATE/kaniko/.docker/config.json"
 SPEC=/tmp/.grc-last-build              # 最近一次 build 的参数，push 时复用
-COPY_MAP="$SHARED/copy/map"            # pull/tag 记录，push 时用 crane 做 registry copy
+COPY_MAP="$STATE/copy/map"             # pull/tag 记录，push 时用 crane 做 registry copy
 # Shim logs are English logfmt on stderr: [docker] level=info|error msg="...".
 log() { printf '[docker] level=info msg="%s"\n' "$*" >&2; }
 die() { printf '[docker] level=error msg="%s"\n' "$*" >&2; exit 1; }
@@ -42,13 +43,13 @@ copy_insecure() {
 
 copy_ref() {
   [ -n "$(command -v crane || true)" ] || die "crane is missing from the runner image; registry copy is unavailable"
-  mkdir -p "$SHARED/kaniko/.docker"
+  mkdir -p "$STATE/kaniko/.docker"
   insecure=""
   all=""
   [ "$3" = 1 ] && insecure="--insecure"
   [ "${4:-0}" = 1 ] && all="--all-tags"
-  # docker login writes the kaniko config; crane reads the same credential store.
-  DOCKER_CONFIG="$SHARED/kaniko/.docker" crane $insecure copy $all "$1" "$2"
+  # docker login writes the same config; crane reads it.
+  DOCKER_CONFIG="$STATE/kaniko/.docker" crane $insecure copy $all "$1" "$2"
 }
 
 # 注册表地址带协议（`https://gitea.corp.local`）是非常常见的写法 —— docker 自己会报
@@ -306,7 +307,7 @@ case "$cmd" in
     mkdir -p "$(dirname "$CREDS")"
     if [ -n "$(command -v crane || true)" ]; then
       # Merge into the existing config so source and target registries can both be used.
-      printf '%s' "$pass" | DOCKER_CONFIG="$SHARED/kaniko/.docker" crane auth login "$host" -u "$user" --password-stdin >/dev/null
+      printf '%s' "$pass" | DOCKER_CONFIG="$STATE/kaniko/.docker" crane auth login "$host" -u "$user" --password-stdin >/dev/null
     else
       auth=$(printf '%s:%s' "$user" "$pass" | base64 | tr -d '\n')
       printf '{"auths":{"%s":{"auth":"%s"}}}' "$host" "$auth" > "$CREDS"
@@ -419,13 +420,13 @@ case "$cmd" in
     case "$ref" in http://*) insecure=1 ;; esac
     ref=$(strip_scheme "$ref")
     [ -n "$(command -v crane || true)" ] || die "crane is missing from the runner image; registry copy is unavailable"
-    mkdir -p "$SHARED/kaniko/.docker"
+    mkdir -p "$STATE/kaniko/.docker"
     inc=""; [ "$insecure" = 1 ] && inc="--insecure"
     # Validate now so pull fails like Docker would, instead of failing later at push.
     if [ "$all_tags" = 1 ]; then
-      DOCKER_CONFIG="$SHARED/kaniko/.docker" crane $inc ls "$ref" >/dev/null
+      DOCKER_CONFIG="$STATE/kaniko/.docker" crane $inc ls "$ref" >/dev/null
     else
-      DOCKER_CONFIG="$SHARED/kaniko/.docker" crane $inc digest "$ref" >/dev/null
+      DOCKER_CONFIG="$STATE/kaniko/.docker" crane $inc digest "$ref" >/dev/null
     fi
     copy_record "$ref" "$ref" "$insecure"
     log "pull $ref: recorded; layers will be copied at push time"

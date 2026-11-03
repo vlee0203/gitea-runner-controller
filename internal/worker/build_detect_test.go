@@ -40,6 +40,16 @@ jobs:
       - uses: actions/checkout@v4
       - run: go test ./...
 `, "t", false},
+		{"纯 registry 搬运不需要 kaniko", `
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: docker login registry.local -u u -p p
+      - run: docker pull registry.local/src:v1
+      - run: docker tag registry.local/src:v1 registry.local/dst:v1
+      - run: docker push registry.local/dst:v1
+`, "copy", false},
 		{"只构建另一个 job", `
 jobs:
   no: { runs-on: ubuntu-latest, steps: [ { run: echo hi } ] }

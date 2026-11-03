@@ -334,11 +334,12 @@ func unsupportedWorkflowFeatures(payload []byte, jobKey string) []string {
 	return out
 }
 
-// needsImageBuild reports whether the job builds or pushes a container image,
-// either with the ordinary `docker build` / `docker push` / `docker login`, with
-// the official docker/* actions, or with kaniko directly. Those jobs get the kaniko
-// sidecar container (see Spec.KanikoImage), so that a workflow written for GitHub
-// runs unchanged on runs-on: ubuntu-latest.
+// needsImageBuild reports whether the job builds a container image, either with
+// the ordinary `docker build` / `docker buildx`, with the official docker/* actions,
+// or with kaniko directly. Those jobs get the kaniko sidecar container (see
+// Spec.KanikoImage), so that a workflow written for GitHub runs unchanged on
+// runs-on: ubuntu-latest. `docker login` / `docker pull` / `docker tag` /
+// `docker push` alone do not need it: registry copies go through crane.
 func needsImageBuild(payload []byte, jobKey string) bool {
 	if jobKey == "" {
 		return false
@@ -362,7 +363,7 @@ func needsImageBuild(payload []byte, jobKey string) bool {
 		if strings.HasPrefix(step.Uses, "docker/") {
 			return true
 		}
-		for _, marker := range []string{"docker build", "docker buildx", "docker push", "docker login", "kaniko/executor"} {
+		for _, marker := range []string{"docker build", "docker buildx", "kaniko/executor"} {
 			if strings.Contains(step.Run, marker) {
 				return true
 			}
