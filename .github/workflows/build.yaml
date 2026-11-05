@@ -31,6 +31,17 @@ permissions:
 # （集群里没有 binfmt/QEMU，且安全基线不允许特权），自举构建请在 GitHub 上跑。
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./cmd/gitea-runner-controller
+
   controller:
     runs-on: ubuntu-latest
     steps:

@@ -131,25 +131,32 @@ filter_log() {
 
 # 解析 build 的参数（$@ = build 之后的所有参数），结果放进 GRC_* 变量
 parse_build() {
-  GRC_TAGS=""; GRC_FILE=""; GRC_CTX=""; GRC_ARGS=""; GRC_TARGET=""; GRC_PLATFORM=""
-  GRC_PUSH=0; GRC_IGNORED=""; GRC_IID=""; GRC_META=""; GRC_LABELS=""
+  GRC_TAGS=""; GRC_FILE=""; GRC_CTX=""; GRC_TARGET=""; GRC_PLATFORM=""
+  GRC_PUSH=0; GRC_IGNORED=""; GRC_IID=""; GRC_META=""
   GRC_NOCACHE=0; GRC_CACHE_REPO=""; GRC_CACHE_UNSUPPORTED=0
+  # Build args and OCI labels can contain spaces (metadata-action descriptions
+  # are a real example). Do not keep them in a space-separated shell variable:
+  # one line per value preserves boundaries.
+  GRC_ARGS_FILE=/tmp/.grc-build-args
+  GRC_LABELS_FILE=/tmp/.grc-build-labels
+  : > "$GRC_ARGS_FILE"
+  : > "$GRC_LABELS_FILE"
   while [ $# -gt 0 ]; do
     case "$1" in
       -t|--tag)     GRC_TAGS="$GRC_TAGS $2"; shift 2 ;;
       -f|--file)    GRC_FILE=$2; shift 2 ;;
-      --build-arg)  GRC_ARGS="$GRC_ARGS $2"; shift 2 ;;
+      --build-arg)  printf '%s\n' "$2" >> "$GRC_ARGS_FILE"; shift 2 ;;
       --target)     GRC_TARGET=$2; shift 2 ;;
       --platform)   GRC_PLATFORM=$2; shift 2 ;;
       # —— 等号形式：--flag=value ——
       --tag=*)         GRC_TAGS="$GRC_TAGS ${1#*=}"; shift ;;
       --file=*)        GRC_FILE=${1#*=}; shift ;;
-      --build-arg=*)   GRC_ARGS="$GRC_ARGS ${1#*=}"; shift ;;
+      --build-arg=*)   printf '%s\n' "${1#*=}" >> "$GRC_ARGS_FILE"; shift ;;
       --target=*)      GRC_TARGET=${1#*=}; shift ;;
       --platform=*)    GRC_PLATFORM=${1#*=}; shift ;;
       --iidfile=*)      GRC_IID=${1#*=}; shift ;;
       --metadata-file=*) GRC_META=${1#*=}; shift ;;
-      --label=*)       GRC_LABELS="$GRC_LABELS ${1#*=}"; shift ;;
+      --label=*)       printf '%s\n' "${1#*=}" >> "$GRC_LABELS_FILE"; shift ;;
       --cache-from=*|--cache-to=*) handle_cache_arg "${1#*=}"; shift ;;
       --secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--progress=*)
                        GRC_IGNORED="$GRC_IGNORED ${1%%=*}"; shift ;;
@@ -161,7 +168,7 @@ parse_build() {
       --iidfile)    GRC_IID=$2; shift 2 ;;
       --metadata-file) GRC_META=$2; shift 2 ;;
       --attest|--provenance|--sbom) shift 2 ;;
-      --label)      GRC_LABELS="$GRC_LABELS $2"; shift 2 ;;
+      --label)      printf '%s\n' "$2" >> "$GRC_LABELS_FILE"; shift 2 ;;
       --cache-from|--cache-to) handle_cache_arg "$2"; shift 2 ;;
       --secret|--ssh|--output|-o|--builder|--network|--shm-size)
                     GRC_IGNORED="$GRC_IGNORED $1"; shift 2 ;;
@@ -182,7 +189,7 @@ parse_build() {
   case "$GRC_PLATFORM" in
     *,*) die "multi-platform build (--platform=$GRC_PLATFORM) is unsupported: kaniko builds one platform at a time and binfmt/QEMU requires privileges" ;;
   esac
-  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "$GRC_ARGS" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" "$GRC_LABELS" "$GRC_NOCACHE" "$GRC_CACHE_REPO" "$GRC_CACHE_UNSUPPORTED" > "$SPEC"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" "" "$GRC_NOCACHE" "$GRC_CACHE_REPO" "$GRC_CACHE_UNSUPPORTED" > "$SPEC"
 }
 
 # 把一次构建（GRC_* + GRC_DEST）交给 kaniko 容器，并把它的输出流回来
@@ -196,9 +203,14 @@ submit() {
   mkdir -p "$dir"
   : > "$dir/args"
   printf '%s\n' "--context=dir://$GRC_CTX" "--dockerfile=$GRC_FILE" >> "$dir/args"
-  for a in $GRC_ARGS; do printf '%s\n' "--build-arg" "$a" >> "$dir/args"; done
-  # OCI labels（metadata-action 会传一串）：kaniko 支持 --label，原样转发
-  for l in $GRC_LABELS; do printf '%s\n' "--label" "$l" >> "$dir/args"; done
+  if [ -f "${GRC_ARGS_FILE:-/tmp/.grc-build-args}" ]; then
+    while IFS= read -r a; do [ -n "$a" ] && printf '%s\n' "--build-arg" "$a" >> "$dir/args"; done < "${GRC_ARGS_FILE:-/tmp/.grc-build-args}"
+  fi
+  # OCI labels（metadata-action 会传一串）：kaniko 支持 --label，原样转发。
+  # One label per line, because a description can contain spaces.
+  if [ -f "${GRC_LABELS_FILE:-/tmp/.grc-build-labels}" ]; then
+    while IFS= read -r l; do [ -n "$l" ] && printf '%s\n' "--label" "$l" >> "$dir/args"; done < "${GRC_LABELS_FILE:-/tmp/.grc-build-labels}"
+  fi
   [ -z "$GRC_TARGET" ]   || printf '%s\n' "--target" "$GRC_TARGET" >> "$dir/args"
   [ -z "$GRC_PLATFORM" ] || printf '%s\n' "--custom-platform" "$GRC_PLATFORM" >> "$dir/args"
   if [ -n "${GRC_DEST:-}" ]; then

@@ -1,0 +1,188 @@
+# Namespace deployment: the controller only needs namespace-scoped RBAC.
+# It is still a *site-level* Gitea controller: the API token and runner
+# registration token belong to the Gitea site administrator. Kubernetes
+# resources (runner Pods) stay in this namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitea-runner-controller
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gitea-runner-controller
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - create
+      - get
+      - list
+      - delete
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - create
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitea-runner-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gitea-runner-controller
+subjects:
+  - kind: ServiceAccount
+    name: gitea-runner-controller
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitea-runner-controller-templates
+data:
+  # jobEnv is merged into every template; a template may override a key.
+  # These are non-sensitive package-manager defaults. Point them at kkrepo's
+  # in-cluster Service; the Kubernetes .svc suffix is already in NO_PROXY.
+  templates.yaml: |
+    env:
+      PIP_INDEX_URL: http://kkrepo.example.com/repository/pypi-group/simple
+      PIP_TRUSTED_HOST: kkrepo.example.com
+      NPM_CONFIG_REGISTRY: http://kkrepo.example.com/repository/npm-group/
+      YARN_REGISTRY: http://kkrepo.example.com/repository/npm-group/
+      YARN_NPM_REGISTRY_SERVER: http://kkrepo.example.com/repository/npm-group/
+      GOPROXY: http://kkrepo.example.com/repository/go-group/
+
+    templates:
+      - name: standard
+        labels:
+          - self-hosted
+          - linux
+          - x64
+          - ubuntu-latest
+          - ubuntu-24.04
+        image: ghcr.io/vlee0203/gitea-runner-controller/runner:latest
+        maxConcurrent: 2
+        timeout: 1h
+        resources:
+          cpu: '2'
+          memory: 4Gi
+          ephemeralStorage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-runner-controller
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea-runner-controller
+  template:
+    metadata:
+      labels:
+        app: gitea-runner-controller
+    spec:
+      serviceAccountName: gitea-runner-controller
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: controller
+          image: ghcr.io/vlee0203/gitea-runner-controller/controller:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 1Gi
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          env:
+            - name: GITEA_INSTANCE_URL
+              value: "https://gitea.example.com"
+            - name: GITEA_API_TOKEN
+              value: REPLACE_ME
+            - name: WEBHOOK_SECRET
+              value: REPLACE_ME
+            - name: TARGET_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: TEMPLATES_FILE
+              value: /etc/templates/templates.yaml
+            - name: RECONCILE_INTERVAL
+              value: 30s
+            - name: IDLE_RUNNER_TIMEOUT
+              value: 15m
+            # Optional: private runner-image pull secret.
+            # - name: IMAGE_PULL_SECRET
+            #   value: registry-pull
+            # Optional: shared actions/cache (deploy/cache.yaml).
+            # - name: CACHE_SERVER_URL
+            #   value: "http://gitea-runner-controller-cache:8088/"
+            # - name: CACHE_SERVER_SECRET
+            #   value: <same as the cache ConfigMap external_secret>
+            # Optional: trust an intranet CA in the controller itself AND in
+            # every runner Pod. Mount a ConfigMap/Secret at /etc/grc-ca first
+            # (see the commented volume at the bottom).
+            # - name: EXECUTOR_CA_PATH
+            #   value: /etc/grc-ca
+            # Optional: platform egress proxy. In-cluster kkrepo/Gitea/cache hosts
+            # are added to NO_PROXY automatically.
+            # - name: HTTP_PROXY
+            #   value: "http://proxy.example.com:3128"
+            # - name: HTTPS_PROXY
+            #   value: "http://proxy.example.com:3128"
+            # - name: NO_PROXY
+            #   value: "10.0.0.0/8,192.168.0.0/16,.example.com"
+            - name: KANIKO_IMAGE
+              value: ghcr.io/osscontainertools/kaniko:v1.28.6-debug
+          volumeMounts:
+            - name: templates
+              mountPath: /etc/templates
+              readOnly: true
+            # - name: grc-ca
+            #   mountPath: /etc/grc-ca
+            #   readOnly: true
+      volumes:
+        - name: templates
+          configMap:
+            name: gitea-runner-controller-templates
+        # - name: grc-ca
+        #   configMap:
+        #     name: gitea-runner-controller-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea-runner-controller
+spec:
+  selector:
+    app: gitea-runner-controller
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

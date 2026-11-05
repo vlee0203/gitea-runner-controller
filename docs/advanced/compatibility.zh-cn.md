@@ -14,10 +14,11 @@ weight: 42
 `actions/checkout@v4`、`run`、`if`、`needs` + outputs、`strategy.matrix`、`env`、`github` 上下文、
 `upload/download-artifact@v4`、`actions/cache@v4`（跨 job 命中需共享缓存服务）、`secrets`（日志打码）、`vars`、
 `continue-on-error`、`timeout-minutes`、`concurrency` + `cancel-in-progress`、可复用 workflow（`workflow_call`）、
-`rerun`、取消 job、多池并发、`workflow_dispatch`（含 inputs）。
+`rerun`、取消 run/job、多模板并发、`workflow_dispatch`（含 inputs）。
 
 在 workflow 里构建镜像：`docker login/build/push` 与官方 `docker/setup-buildx-action`、`login-action`、
-`metadata-action`、`build-push-action` 可原样使用；`setup-qemu-action` 会被跳过并告警（单平台构建不需要它）。
+`metadata-action`、`build-push-action` 可原样使用；每个 runner Pod 都带 kaniko sidecar，不需要额外
+`runs-on` label；`setup-qemu-action` 会被跳过并告警（单平台构建不需要它）。
 只做镜像搬运的 `docker pull` + `docker tag` + `docker push` 也支持（由 crane 做 registry copy）；
 单独的 `docker/login-action` 不会触发 kaniko。登录凭据只在当前 job 有效，login 与 build/push
 分在不同 job 时，build job 必须自己再登录。
@@ -41,7 +42,7 @@ weight: 42
 
 | 缺口 | 原因 | 表现 |
 | --- | --- | --- |
-| `container:` / `services:` / `uses: docker://` | runner 以 **host 模式**运行且集群命名空间禁特权 → 没有 docker daemon | 领到 task 后**快速失败**并把原因写进 job 日志（不静默） |
+| `container:` / `services:` / `uses: docker://` | runner 以 **host 模式**运行且集群命名空间禁特权 → 没有 docker daemon | runner 在对应步骤报错；不会被静默忽略 |
 | `docker run` / `docker compose` | 同上 | `docker` 替身明确报错 |
 | **多平台构建**（`platforms: linux/amd64,linux/arm64`） | 需要 binfmt/QEMU 模拟，而注册模拟器要 `docker run --privileged`（安全基线不允许）；交叉编译也绕不过（需要 per-stage platform，kaniko 不支持；且 node 这类语言必须有真 arm64 执行环境） | 明确报错：`multi-platform build (...) is unsupported ...` |
 | `windows-*` / `macos-*` | runner 是 Linux 进程 | 没有 runner 能接 → 一直排队 |
@@ -52,7 +53,8 @@ weight: 42
 
 ## 四、行为上值得知道的差异
 
-- **没有 runner 能接的 job 一直排队**（GitHub 是 24h 后自动失败），且 Gitea 没有 cancel run 的 API。
+- **没有 runner 能接的 job 一直排队**（GitHub 是 24h 后自动失败）；Gitea 28.1 有 run 级 cancel API，
+  但没有单 job cancel API，单 job 终态依赖 runner 上报或 zombie timeout。
 - **workflow 语法错是静默失败**：run 会被创建但零 job、零日志；先本地 parse 一遍 YAML。
 - **自带 actions 的下载源**：Gitea 的 `DEFAULT_ACTIONS_URL` 默认指向 github（可用 `self` 指向自身）。
 - **workflow 目录优先级**：Gitea 先扫描 `.gitea/workflows`，该目录存在时**不再扫描** `.github/workflows`

@@ -1,4 +1,4 @@
-# 可选：共享的 actions/cache 服务器。与 deploy/namespace/ 或 deploy/cluster/ 一并 apply。
+# 可选：共享的 actions/cache 服务器。与 deploy/all.yaml 一并 apply。
 #
 # 这是 actions/cache 的文件缓存，与镜像构建层缓存无关（后者由 workflow 里的
 # cache-from/cache-to: type=registry 显式开启，走 OCI registry）。
@@ -66,6 +66,7 @@ spec:
               memory: 1Gi
               ephemeral-storage: 1Gi
           image: ghcr.io/vlee0203/gitea-runner-controller/runner:latest
+          imagePullPolicy: Always
           command:
             - /usr/local/bin/gitea-runner
             - cache-server

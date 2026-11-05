@@ -6,80 +6,120 @@ weight: 40
 
 # 架构与机制
 
-## 为什么是自研
+## 一句话
 
-| 现成方案 | 为什么不用 |
-| --- | --- |
-| Gitea 官方 runner 的 `kubernetes://` 模式 | 需要 k8s ≥ 1.30（靠 WebSocket `v5.channel.k8s.io` exec 进 job pod）；低版本上 Pod 建得起来但 exec 阶段被杀 |
-| GARM + garm-provider-k8s | 支持 GitHub 与 Gitea（Gitea ≥ 1.24），也能用 Mercedes-Benz 的 k8s provider/operator 按需起 Pod；但它是独立的 runner 管理器，需要在 Gitea 侧持有管理凭据（建/删 runner、管池）并引入自己的 webhook/provider 控制面，与本项目"不持管理 token、只持注册令牌与 runner 身份"的模型不符 |
-| Gitea Enterprise ARC | 商业版，靠 Enterprise 侧的 JIT/scale-set 协议 |
+**Gitea 的 queued jobs 是队列，Kubernetes 里的 runner Pod 是容量，controller 只做对账。**
 
-根因：**Gitea OSS 没有 JIT configuration API**——服务端拿不到"把指定 job 绑给指定 runner"的能力，
-而 Gitea 自己的调度是"按 label 拉取"（`models/actions/task.go:CreateTaskForRunner`：按 label 子集筛
-`status=Waiting` 的 job，谁先拉到归谁）。
+```text
+Gitea waiting jobs ──list/webhook──▶ controller ──create──▶ runner Pod（一次性）
+       ▲                                                       │
+       └──────────────── runner 直接上报状态/日志 ──────────────┘
+```
 
-## 核心机制：先领取 + facade 交接
+## 为什么这么设计
 
-既然服务端不能"指派"，那就在**客户端**把它做实：
+Gitea OSS 没有 JIT configuration API，但 1.24+ 提供了 `workflow_job` webhook 和 Actions job 列表 API。
+因此不需要再自己注册成 worker、领取 task、再通过 facade 交接。controller 只需要：
 
-1. **worker 先原子领取**：worker 本身是一条注册在册的 Gitea runner（声明池的 label）。有空位时调
-   `FetchTask`，**原子领走一个具体 task**——Gitea 侧该 task 的归属当场确定，别的 worker 抢不走。
-2. **交接给一次性环境**：controller 为该 task 建一个一次性 executor Pod；Pod 内的 **stock
-   `gitea-runner`** 通过 controller 的 **facade** 拿到"这个已被领取的 task"并执行。
-3. **回报**：Pod 内 runner 的 `UpdateTask`/`UpdateLog` 打到 facade，facade 用**领取者身份**转发给 Gitea。
+1. 知道有哪些 waiting job；
+2. 知道当前有哪些 runner Pod；
+3. 在 `active < maxConcurrent` 时注册一个 ephemeral runner 并创建 Pod。
 
-### 为什么是 facade，而不是让 Pod 直连 Gitea
-
-task 已经被 **worker 身份**领取了。Pod 内的 runner 若直连 Gitea：
-
-- 它自己 `FetchTask` 拿不到这个 task（已被领取的不在 Waiting 里）；
-- 用 worker 凭据直连，则 Gitea 只看到"一个 runner 跑了所有 job"，而且**把长期凭据下发到了 Pod**。
-
-facade 让 stock runner **一行都不改**（`--instance` 指向 facade），长期凭据留在 controller；每个 Pod
-只拿到一张**绑定本次 assignment 的 capability**（一次性、随 Pod 一起消失）。facade 还要反向代理非
-RunnerService/Ping 的路径到真实 Gitea——因为 runner 会把 `--instance` 当成 job 的 server URL，
-否则 `actions/checkout` 会去 facade 拉代码而 404。
+runner 直接连 Gitea，成功/失败/日志都由 runner 自己上报。controller 不再替 runner 上报任务状态。
 
 ## 组件
 
+- **controller**：唯一常驻组件。Lease 选主、reconcile、webhook、runner 注册/Pod 创建/清理。
+- **runner Pod**：一次性，stock `gitea-runner` host 模式；从模板派生；`--once`。
+- **runner 模板**：labels、image、resources、maxConcurrent、timeout、build、env。
+
+## reconcile 循环
+
+每 `RECONCILE_INTERVAL`（默认 30s）或收到 `workflow_job` webhook 时：
+
+```text
+list queued jobs       (Gitea job API status=queued)
+list in-progress jobs  (status=in_progress)
+list managed runner Pods
+
+清理 Succeeded/Failed Pod + 对应 runner 记录
+删除长时间没有对应 in-progress job 的空 runner Pod
+  （避免“注册了但永远没领到活”的 ephemeral runner 残留）
+
+对每个 waiting job：
+  按 job 的 labels 选择最具体的模板
+  统计每个模板期望 runner 数，封顶 maxConcurrent
+
+对每个模板：
+  active < desired 时：
+    取注册令牌
+    预注册 ephemeral runner（拿到 id/uuid/token）
+    创建 runner Pod（.runner 走 env + init）
 ```
-Gitea ◀─(worker 凭注册身份领取/回报)─ controller ──建 Pod──▶ executor Pod
-                                                 │                 │
-                                                 └── facade ◀──────┘（stock gitea-runner）
+
+因为 waiting jobs 来自 Gitea，controller 重启不会丢任务；webhook 只是降低延迟，漏投由定时
+reconcile 补上。
+
+## runner 生命周期
+
+### 创建
+
+1. controller 通过 admin API 获取注册令牌；
+2. 通过 RunnerService `Register` 注册 runner，`ephemeral=true`，获取 id/uuid/token；
+3. 把 `.runner`、可选 `config.yaml`、可选 CA 通过 env 交给 init container；
+4. 创建 Pod；Pod 里 init container 把 `.runner` 复制到 `/data`；
+5. runner 容器执行 `gitea-runner daemon --once`，直接连 Gitea。
+
+### 成功/失败/超时
+
+- 成功/失败：runner 自己上报给 Gitea。
+- workflow 的 `timeout-minutes` / runner timeout：runner 自己取消并上报。
+- Pod 的 `activeDeadlineSeconds` 是模板级兜底；Pod 被杀后 controller 释放容量。
+- runner 静默死亡：Gitea 服务端 `ZOMBIE_TASK_TIMEOUT`（默认 10m）收尾；controller 只负责删 Pod、
+  删自己注册的 runner 记录、释放槽位。
+
+### 取消
+
+- 用户取消 run/job：Gitea 把任务置为 `Cancelling`，runner 收尾并上报；
+- runner 还活着时，controller 不需要额外操作；
+- runner 失联时，Gitea 用 `TaskReportTimeout` / zombie timeout 收敛；
+- 公开 API 只有 run 级取消，没有单 job 取消 API。
+
+### 清理
+
+- Pod 进入 Succeeded/Failed：删除 Pod，删除 controller 预注册的 runner 记录。
+- 空 runner（注册后没有 running job）超过 `IDLE_RUNNER_TIMEOUT`（默认 15m）：删除。
+- Gitea 也会清理“已经跑完任务的 ephemeral runner”；controller 的删除是兜底，并覆盖“没领到任务”
+  的 runner。
+
+## 并发
+
+- `maxConcurrent` 是每个模板的硬上限；超出的 job 留在 Gitea waiting 队列。
+- active 包括 Pending/Running 的 Pod。
+- 多个 controller 副本通过 Lease 选主，只有 leader 创建 Pod。
+
+## 模板匹配
+
+Gitea 的匹配方向是：**job 的 `runs-on` labels 必须全部出现在 runner 的 labels 里**。所以模板 labels
+是 job labels 的超集；多个模板都覆盖时，选 labels 最少（最通用）的模板。例如：
+
+```yaml
+standard: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
 ```
 
-- **worker**：每个池一个，= 一条 Gitea runner 注册 + 一个领活循环 + 本地槽位（`slots`）。
-- **facade**：每个 controller 实例一个（所有池共用），从 assignment Secret 解析预领取的 task，并把回报交给对应池的领取者身份。
-- **executor Pod**：一次性，跑完即删；命名 `grc-<repo>-<job>-<taskid>`，按 label 定位。
-- **构建型 job**：Pod 里多一个官方 kaniko 容器（见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)）。
+- `runs-on: ubuntu-latest` → `standard`
+- `runs-on: [self-hosted, linux, x64, ubuntu-latest]` → `standard`
 
-## 状态与恢复
+## 构建
 
-两类状态，来源不同：
+每个 runner Pod 都带官方 kaniko 旁路容器，runner 容器里的 `docker` 替身把构建请求交给它。
+这样标准 workflow 的 `docker build` / `docker/build-push-action` 不需要任何平台专用 label，
+保持“GitHub Actions 写法原样可用”。
 
-- **worker 的注册身份**（uuid + token）：存 k8s Secret，重启复用（否则每次重启都在 Gitea 里堆一条新记录）。
-  注册顺序是**先证明 Secret 可写、再注册**——注册会产生一条只有 API 能删的记录，先注册后落盘失败会留僵尸。
-- **in-flight assignment**：以 k8s 为状态源 —— 每条 assignment 一个 Secret（task、poolKey、capability
-  哈希、lastSeen），不引数据库，也不把 assignment 只存在进程内存里。
+代价是每个 Pod 多一个空闲的 kaniko 容器；这是为了不解析 workflow 内容、也不要求用户改
+`runs-on` 所做的取舍。
 
-controller 启动时 **Recover**：列出上一次留下的 executor Pod；assignment Secret 还在且池匹配的**接管**
-（`Adopt`），assignment/pool 已不存在的才当孤儿删除。facade 无状态，所以接管不要求原进程还活着。
+## 与旧架构的关系
 
-Pod 起不来（`StartError` / `ImagePullBackOff` / 配置错）也会被判定为失败：这类状态会让 Pod **永远停在
-Pending**，不处理就会占着槽位、并卡住 controller 的 drain 与滚动更新。
-
-## 滚动更新与 drain
-
-- **facade 无状态**：`capability → assignment` 每次从 assignment Secret 解析（`K8sResolver`），所以
-  **任何实例都能服务任何 job**；executor Pod 经 Service 访问 facade，不需要粘在创建它的实例上。
-- **滚动更新**：Deployment 用 `RollingUpdate`（maxSurge 1 / maxUnavailable 1）+ readinessProbe
-  （TCP 8080）。新实例只有**拿到 Lease** 后才会启动 facade / 变 Ready；老实例收到 SIGTERM 后
-  `ReleaseOnCancel: true` 立即释放租约，新实例可以马上接管并开始领新 task，**不必等老实例 drain 完**。
-  并发仍由池的 `slots` 控制；副本保持 1 只是部署上的简化。
-- **drain（老实例收尾）**：老实例停止领新 task，但已领的 job 用独立于 leader context 的 job context
-  继续跑；最多等 `SHUTDOWN_TIMEOUT`（默认 30m，须 ≤ `terminationGracePeriodSeconds`）。期间每 15s
-  检查：某 job 连续 `DRAIN_SILENCE`（默认 10m）没有和 facade 通信 → 判卡死，单独取消（报失败 + 删
-  Pod）；还在上报的 job 继续等。到总超时则取消剩余 job。这段 drain 只决定老实例何时退出，不影响新
-  实例服务与领取。
-
-`controller` 是本仓库唯一的可执行文件（`gitea-runner-controller controller`）。
+旧版的 worker、facade、assignment Secret、精确 job↔Pod 绑定已全部删除。新架构不提供兼容模式；
+升级是替换，不是新旧并存。

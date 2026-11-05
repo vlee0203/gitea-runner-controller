@@ -1,77 +1,48 @@
 ---
 title: 开发
 slug: advanced/development
-weight: 43
+weight: 50
 ---
 
 # 开发
 
 ## 代码结构
 
-```
-cmd/gitea-runner-controller/     入口（controller 子命令）
-internal/
-  config/     环境变量 + pools.yaml 解析与校验
-  scope/      namespace / cluster 两种作用域的差异收口（executor Pod 建在哪）
-  worker/     一个池 = 一条 runner 身份 + 领活循环 + 槽位；含"这个 job 要构建镜像吗"的判定
-  giteaclient/  Gitea RunnerService 客户端（Register/Declare/FetchTask/UpdateTask/UpdateLog + 身份头）
-  executor/    executor Pod 的建/查/删（含构建型 job 的 kaniko 容器与共享目录）
-  facade/      runner 交接（RunnerService + Ping 的本地实现，其余反向代理到真实 Gitea）
-  lifecycle/   重启时的残留 Pod 清理与 task 失败上报
-  state/       worker 身份持久化在 k8s Secret
-container/
-  controller.Dockerfile   controller 镜像（编译 + distroless）
-  runner.Dockerfile       执行环境镜像（工具链 + stock gitea-runner + `docker` 替身）
-  docker.sh               `docker` 替身（把标准 docker 命令转给同 Pod 的 kaniko 容器）
-deploy/                   namespace / cluster 两套清单 + 可选的 actions/cache 共享服务
-docs/                     本文档
+```text
+cmd/gitea-runner-controller/   进程入口、leader election、webhook server
+internal/config/               controller env + templates.yaml 解析与校验
+internal/controller/           reconcile：waiting jobs ↔ runner Pods
+internal/giteaapi/             Gitea admin Actions REST API
+internal/giteaclient/          RunnerService.Register
+internal/executor/             runner Pod + env/init 文件
+internal/webhook/              workflow_job webhook 校验
+container/                     controller/runner 镜像、docker 替身
+deploy/                        namespace / cluster 清单
 ```
 
-## 本地构建与测试
+没有 worker、facade、state、scope、lifecycle 包。
 
-工具链：**Go ≥ 1.26**（`gitea.dev/actionslib` 的要求）。本仓库在父级 `go.work` 下时，命令要带 `GOWORK=off`。
+## 构建与测试
 
 ```bash
-GOWORK=off go build ./...
-GOWORK=off go test ./...        # 含 facade 交接语义、Pod 命名、启动失败判定、构建路由判定等单测
+GOWORK=off go test ./...
 GOWORK=off go vet ./...
+GOWORK=off go build ./cmd/gitea-runner-controller
 ```
 
-## 镜像与 CI
+测试覆盖：
 
-GitHub 侧用 `.github/workflows/build.yaml`，Gitea 侧用 `.gitea/workflows/{build,release}.yaml`。两者都是
-push 到 main（路径过滤相同：`container/` `cmd/` `internal/` `go.mod` `go.sum` 与 workflow 自身；也可手动触发），
-构建并推送 controller / runner 两个镜像。**GitHub 版是 `linux/amd64` + `linux/arm64` 双架构；Gitea 版只构建
-`linux/amd64`**（集群没有 binfmt/QEMU）：
+- config：模板解析、模板匹配、env 合并、proxy NO_PROXY；
+- controller：并发上限、模板选择、终态清理、空 runner 清理、Pod 创建失败回滚；
+- executor：`.runner` env + init 落盘、runner/kaniko 双容器、HOME=/data、CA 注入；
+- giteaapi：job 列表分页、注册令牌、删除 runner；
+- webhook：HMAC、事件过滤。
 
-| 镜像 | 来源 | 标签 |
-| --- | --- | --- |
-| `ghcr.io/vlee0203/gitea-runner-controller/controller` | `container/controller.Dockerfile` | `sha-<短 commit sha>`、`latest`（main 上）；打 `vX.Y.Z` tag 时另有 `vX.Y.Z` |
-| `ghcr.io/vlee0203/gitea-runner-controller/runner` | `container/runner.Dockerfile` | 同上，另有历史沿用的 `ubuntu-latest` |
+## CI 镜像
 
-部署模板默认用 `:latest`，日常升级不必改 tag；CI 在 main 上同时产出 `latest` 与不可变的
-`sha-<短 commit sha>`。**线上滚动更新不要用 `latest`**：把池镜像、controller 镜像和
-`RUNNER_IMAGE` 三处一起钉到同一次构建的 sha，保证可复现、可回滚。`ubuntu-latest` 是 runner 的历史兼容 tag。
+CI 产出：
 
-多架构不额外花钱：构建阶段用 `--platform=$BUILDPLATFORM` 在 builder 上交叉编译（Go 目标架构来自
-`TARGETOS/TARGETARCH`），不需要 QEMU 跑编译；两个基础镜像（`golang` / `distroless`、以及 runner 的
-`docker.gitea.com/runner` 与 `runner-images`）本身都发布双架构。
+- `ghcr.io/vlee0203/gitea-runner-controller/controller:latest` + `:sha-<commit>`
+- `ghcr.io/vlee0203/gitea-runner-controller/runner:latest` + `:sha-<commit>`
 
-GitHub 版用标准 GitHub 写法（`checkout` + `setup-qemu` + `setup-buildx` + `login` + `metadata` +
-`build-push`）。Gitea 版在 `.gitea/workflows/` 下，差异只有三处：registry/登录凭据换成
-`secrets.REGISTRY/REG_USER/REG_PASS`、去掉 `setup-qemu-action`、`platforms` 只留 `linux/amd64`。
-**多平台在 Gitea 侧跑不了**：集群没有 binfmt/QEMU 注册且安全基线不允许特权，替身会明确报错而不是静默降级。
-Gitea 默认先扫描 `.gitea/workflows`，该目录存在时不会扫描 `.github/workflows`。
-
-构建层缓存默认关闭；Gitea 版目前没写 `cache-from/cache-to`。要开就在 build-push 步骤加
-`type=registry,ref=…`，见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。
-
-`.github/workflows/codeql.yaml` 用 GitHub 官方的 CodeQL 做 Go 静态安全审计（push / PR / 每周
-schedule），结果在仓库的 Security → Code scanning 查看。它依赖 GitHub 的 code scanning API，只在
-GitHub 上跑；Gitea 侧因为 `.gitea/workflows` 存在，不会执行 `.github/workflows`。
-
-## 改动时注意
-
-- executor Pod 的镜像**强制 `PullAlways`**（池镜像用可变 tag，缓存会掩盖改动）。
-- 新增/修改池字段时同步更新 `deploy/*/all.yaml` 的示例与本文档。
-- 涉及机制性取舍（为什么这样做、不做会怎样）写成**紧邻代码的那几行注释**，别只留在文档里。
+线上滚动更新时把模板里的 runner image 和 controller image 一起钉到同一次构建的 sha。
