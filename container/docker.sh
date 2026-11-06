@@ -19,6 +19,7 @@ set -eu
 SHARED=${GRC_SHARED:-/shared}          # 与 kaniko 容器共享的目录（仅构建型 job 挂载）
 STATE=${GRC_SHARED:-${HOME:-/tmp}/.grc-docker}  # 登录凭据与 copy 映射；纯搬运 job 用本地状态
 CREDS="$STATE/kaniko/.docker/config.json"
+INJECTOR=${GRC_DOCKERFILE_INJECT:-/usr/local/bin/dockerfile-inject}  # 包代理 ARG 注入器
 SPEC=/tmp/.grc-last-build              # 最近一次 build 的参数，push 时复用
 COPY_MAP="$STATE/copy/map"             # pull/tag 记录，push 时用 crane 做 registry copy
 # Shim logs are English logfmt on stderr: [docker] level=info|error msg="...".
@@ -192,6 +193,82 @@ parse_build() {
   printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" "" "$GRC_NOCACHE" "$GRC_CACHE_REPO" "$GRC_CACHE_UNSUPPORTED" > "$SPEC"
 }
 
+# 生成派生 Dockerfile：在每个 FROM 后插入 ARG，值由 --build-arg 传入。
+# 只注入 ARG 不注入 ENV，所以具体代理地址不会写进最终镜像的 Config.Env。
+inject_build_env() {
+  GRC_BUILD_DOCKERFILE=$GRC_FILE
+  GRC_INJECT_KEYS=""
+  [ -n "${GRC_BUILD_ENV_KEYS:-}" ] || return 0
+  [ -x "$INJECTOR" ] || die "dockerfile injector is missing ($INJECTOR)"
+  for k in $(printf '%s' "$GRC_BUILD_ENV_KEYS" | tr ',' ' '); do
+    [ -n "$k" ] || continue
+    eval "v=\${$k:-}"
+    [ -n "$v" ] || continue
+    GRC_INJECT_KEYS="${GRC_INJECT_KEYS:+$GRC_INJECT_KEYS,}$k"
+  done
+  [ -n "$GRC_INJECT_KEYS" ] || return 0
+  [ -f "$GRC_FILE" ] || die "Dockerfile not found: $GRC_FILE"
+  "$INJECTOR" -in "$GRC_FILE" -out "$dir/Dockerfile" -keys "$GRC_INJECT_KEYS" \
+    || die "failed to inject build env into $GRC_FILE"
+  GRC_BUILD_DOCKERFILE="$dir/Dockerfile"
+  log "build env injected: $GRC_INJECT_KEYS"
+}
+
+# 用户显式 --build-arg 优先；否则用 controller 的 buildEnv 值。
+append_build_env_args() {
+  [ -n "${GRC_INJECT_KEYS:-}" ] || return 0
+  for k in $(printf '%s' "$GRC_INJECT_KEYS" | tr ',' ' '); do
+    if grep -Eq "^${k}(=|$)" "${GRC_ARGS_FILE:-/tmp/.grc-build-args}" 2>/dev/null; then
+      continue
+    fi
+    eval "v=\${$k:-}"
+    [ -n "$v" ] || continue
+    printf '%s\n' "--build-arg" "$k=$v" >> "$dir/args"
+  done
+}
+
+# registryMaps: docker.io -> --registry-mirror（go-containerregistry 的 Hub key
+# 是 index.docker.io），其它 registry -> --registry-map；目标可带 path 前缀。
+append_registry_maps() {
+  [ -n "${GRC_REGISTRY_MAPS_B64:-}" ] || return 0
+  maps=$(printf '%s' "$GRC_REGISTRY_MAPS_B64" | base64 -d 2>/dev/null) \
+    || die "invalid GRC_REGISTRY_MAPS_B64"
+  hub=""
+  pairs=""
+  insecure=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    orig=${line%%=*}
+    target=${line#*=}
+    scheme=https
+    case "$target" in
+      http://*)  scheme=http; target=${target#*://} ;;
+      https://*) target=${target#*://} ;;
+    esac
+    host=${target%%/*}
+    if [ "$scheme" = http ]; then
+      case " $insecure " in *" $host "*) ;; *) insecure="$insecure $host" ;; esac
+    fi
+    if [ "$orig" = "index.docker.io" ] || [ "$orig" = "docker.io" ]; then
+      [ -z "$hub" ] || die "duplicate Docker Hub registry map"
+      hub=$target
+    else
+      pairs="${pairs:+$pairs;}$orig=$target"
+    fi
+  done <<EOF
+$maps
+EOF
+  [ -z "$hub" ] || printf '%s\n' "--registry-mirror=$hub" >> "$dir/args"
+  [ -z "$pairs" ] || printf '%s\n' "--registry-map=$pairs" >> "$dir/args"
+  for h in $insecure; do
+    printf '%s\n' "--insecure-registry=$h" >> "$dir/args"
+  done
+  if [ "${GRC_REGISTRY_MAP_SKIP_FALLBACK:-0}" = 1 ]; then
+    printf '%s\n' "--skip-default-registry-fallback" >> "$dir/args"
+  fi
+  log "registry maps: hub=${hub:-none} mapped=${pairs:-none}"
+}
+
 # 把一次构建（GRC_* + GRC_DEST）交给 kaniko 容器，并把它的输出流回来
 submit() {
   [ -d "$SHARED" ] || die "kaniko sidecar is not available in this job ($SHARED is missing); the job must be recognized as a build job"
@@ -202,10 +279,13 @@ submit() {
   [ -z "${GRC_IID:-}" ] || iid=$GRC_IID
   mkdir -p "$dir"
   : > "$dir/args"
-  printf '%s\n' "--context=dir://$GRC_CTX" "--dockerfile=$GRC_FILE" >> "$dir/args"
+  inject_build_env
+  printf '%s\n' "--context=dir://$GRC_CTX" "--dockerfile=$GRC_BUILD_DOCKERFILE" >> "$dir/args"
   if [ -f "${GRC_ARGS_FILE:-/tmp/.grc-build-args}" ]; then
     while IFS= read -r a; do [ -n "$a" ] && printf '%s\n' "--build-arg" "$a" >> "$dir/args"; done < "${GRC_ARGS_FILE:-/tmp/.grc-build-args}"
   fi
+  append_build_env_args
+  append_registry_maps
   # OCI labels（metadata-action 会传一串）：kaniko 支持 --label，原样转发。
   # One label per line, because a description can contain spaces.
   if [ -f "${GRC_LABELS_FILE:-/tmp/.grc-build-labels}" ]; then

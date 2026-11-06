@@ -15,6 +15,8 @@ weight: 60
 | job 超时/失败但 Gitea 仍显示 running | runner 失联，Gitea 等 `ZOMBIE_TASK_TIMEOUT`（默认 10m） | 等 Gitea 清理；需要更快就调小 `[actions] ZOMBIE_TASK_TIMEOUT` |
 | 取消后 Pod 还在 | runner 收尾中；或 runner 失联 | 等 Gitea/runner 收敛；controller 只负责清理终态 Pod |
 | `pull`/`push` 报 `crane is missing` | 模板 image 不是当前 runner 镜像 | 使用带 crane 的 runner 镜像 |
-| 包管理器仍走公网/代理 | 模板 env 没写，或 kkrepo 是 ingress 域名但没进 `NO_PROXY` | 检查模板 env；service DNS 用 `.svc`，ingress 地址加 `NO_PROXY` |
+| 包管理器仍走公网/代理 | 模板 `buildEnv` 没写，或 kkrepo 是 ingress 域名但没进 `NO_PROXY` | 检查 `buildEnv`；service DNS 用 `.svc`，ingress 地址加 `NO_PROXY` |
+| Dockerfile 构建没走包代理 | runner image 不是本次版本（缺 `dockerfile-inject`），或 `GRC_BUILD_ENV_KEYS` 为空 | 升级 runner image；看 shim 日志 `build env injected: ...` |
+| `FROM` 仍直连上游 registry | `registryMaps` 没有对应 key，或 kaniko 回源了 | 加一行映射；需要 fail fast 时开 `skipDefaultRegistryFallback` |
 | webhook 没触发但定时能跑 | webhook secret/事件配置不对 | 检查 Gitea system webhook 的 Workflow jobs 事件和 signature secret |
 | 模板更新不生效 | controller 只在启动时读 templates.yaml | 更新 ConfigMap 后重启 controller |

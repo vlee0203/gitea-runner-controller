@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -68,11 +69,19 @@ type Spec struct {
 	// RunnerConfig is the runner config.yaml (cache settings). Optional.
 	RunnerConfig string
 	// KanikoImage adds the kaniko sidecar for build templates.
-	KanikoImage           string
-	ProxyEnv              map[string]string
-	JobEnv                map[string]string
-	ImagePullSecret       string
-	ActiveDeadlineSeconds int64
+	KanikoImage string
+	ProxyEnv    map[string]string
+	JobEnv      map[string]string
+	// BuildEnv is exported to the runner and injected into image builds as ARG
+	// declarations; values travel in GRC_BUILD_ENV_KEYS' matching env vars.
+	BuildEnv     map[string]string
+	RegistryMaps map[string]string
+	// SkipDefaultRegistryFallback makes kaniko fail instead of pulling directly
+	// from an upstream registry when the mapped kkRepo target does not have the
+	// image.
+	SkipDefaultRegistryFallback bool
+	ImagePullSecret             string
+	ActiveDeadlineSeconds       int64
 }
 
 // Manager owns runner Pods and their config Secrets in one namespace.
@@ -114,7 +123,19 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	if err != nil {
 		return err
 	}
-	env := mergeEnv(s.ProxyEnv, s.JobEnv)
+	// BuildEnv is the package-proxy layer; JobEnv is the template's explicit
+	// environment and wins if both name the same variable.
+	env := mergeEnv(s.ProxyEnv, s.BuildEnv)
+	env = mergeEnv(env, s.JobEnv)
+	if keys := buildEnvKeys(s.BuildEnv, env); len(keys) > 0 {
+		env["GRC_BUILD_ENV_KEYS"] = strings.Join(keys, ",")
+	}
+	if encoded := encodeRegistryMaps(s.RegistryMaps); encoded != "" {
+		env["GRC_REGISTRY_MAPS_B64"] = encoded
+	}
+	if s.SkipDefaultRegistryFallback {
+		env["GRC_REGISTRY_MAP_SKIP_FALLBACK"] = "1"
+	}
 	// The runner's workspace lives under HOME. Keeping HOME on the shared /data
 	// volume means the kaniko sidecar sees the same checkout/build context.
 	env["HOME"] = dataDir
@@ -265,6 +286,41 @@ func mergeEnv(base, overlay map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// buildEnvKeys returns the sorted buildEnv names that still have a non-empty
+// value after template overrides. The shim reads their actual values from the
+// runner environment, so a step-level override is honored automatically.
+func buildEnvKeys(buildEnv, merged map[string]string) []string {
+	keys := make([]string, 0, len(buildEnv))
+	for k := range buildEnv {
+		if merged[k] != "" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// encodeRegistryMaps serializes mappings as base64 lines "registry=target",
+// which the POSIX shell shim can decode without a JSON parser.
+func encodeRegistryMaps(maps map[string]string) string {
+	if len(maps) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(maps))
+	for k := range maps {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(maps[k])
+		b.WriteByte('\n')
+	}
+	return base64.StdEncoding.EncodeToString([]byte(b.String()))
 }
 
 func pullSecrets(name string) []corev1.LocalObjectReference {

@@ -85,6 +85,13 @@ func testConfig() *config.Config {
 			{Name: "standard", Labels: []string{"self-hosted", "ubuntu-latest"}, Image: "runner:1", MaxConcurrent: 2, Timeout: "1h"},
 		},
 		KanikoImage: "kaniko:1",
+		BuildEnv: map[string]string{
+			"GOPROXY": "http://kkrepo/go",
+		},
+		RegistryMaps: map[string]string{
+			"index.docker.io": "https://docker.example",
+		},
+		SkipDefaultRegistryFallback: true,
 	}
 }
 
@@ -123,6 +130,11 @@ func TestReconcileCreatesUpToTemplateMaximum(t *testing.T) {
 	}
 	if pods.started[0].Template != "standard" || pods.started[0].Runner.UUID == "" {
 		t.Fatalf("spec = %+v", pods.started[0])
+	}
+	if pods.started[0].BuildEnv["GOPROXY"] != "http://kkrepo/go" ||
+		pods.started[0].RegistryMaps["index.docker.io"] != "https://docker.example" ||
+		!pods.started[0].SkipDefaultRegistryFallback {
+		t.Fatalf("build config not passed to executor: %+v", pods.started[0])
 	}
 }
 

@@ -52,4 +52,5 @@ Gitea 的 runner 注册和 API 查询是两套权限：
 - 不做精确 job↔Pod 预绑定；
 - 不做 runner 巡检删除（只删 controller 自己注册的 runner ID）；
 - 不把 admin API token 或注册令牌下发到 job Pod；
-- 不把包管理器源配置做成 Secret；它们是非敏感默认值，直接写模板 env。
+- 不把包管理器源配置做成 Secret；它们是非敏感默认值，直接写模板 `buildEnv`。`buildEnv` 只以
+  `ARG` 注入构建阶段，避免把内部地址以 `ENV` 写进最终镜像；带凭据的 URL 仍不允许放进去。

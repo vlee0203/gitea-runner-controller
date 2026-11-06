@@ -32,11 +32,22 @@ type Template struct {
 	MaxConcurrent int               `yaml:"maxConcurrent"`
 	Timeout       string            `yaml:"timeout"`
 	Env           map[string]string `yaml:"env"`
+	// BuildEnv is exported to the runner and injected into every Dockerfile
+	// stage as ARG declarations (values travel as --build-arg), so package
+	// managers inside image builds use the same proxies as run: steps.
+	BuildEnv map[string]string `yaml:"buildEnv"`
+	// RegistryMaps redirects kaniko base-image pulls. Keys are original
+	// registries; values are kkRepo group/proxy addresses, optionally with a
+	// path prefix.
+	RegistryMaps map[string]string `yaml:"registryMaps"`
 }
 
 type templatesFile struct {
-	Env       map[string]string `yaml:"env"`
-	Templates []Template        `yaml:"templates"`
+	Env                         map[string]string `yaml:"env"`
+	BuildEnv                    map[string]string `yaml:"buildEnv"`
+	RegistryMaps                map[string]string `yaml:"registryMaps"`
+	SkipDefaultRegistryFallback bool              `yaml:"skipDefaultRegistryFallback"`
+	Templates                   []Template        `yaml:"templates"`
 }
 
 // Config is the resolved controller configuration.
@@ -64,6 +75,11 @@ type Config struct {
 	// JobEnv is merged into every template's Env; template Env wins on conflict.
 	JobEnv    map[string]string
 	Templates []Template
+
+	// BuildEnv and RegistryMaps are top-level defaults; template values win.
+	BuildEnv                    map[string]string
+	RegistryMaps                map[string]string
+	SkipDefaultRegistryFallback bool
 }
 
 func env(key, def string) string {
@@ -156,6 +172,13 @@ func Load() (*Config, error) {
 	if err := validateEnv("top-level env", tf.Env); err != nil {
 		return nil, err
 	}
+	if err := validateBuildEnv("top-level buildEnv", tf.BuildEnv); err != nil {
+		return nil, err
+	}
+	topMaps, err := normalizeRegistryMaps("top-level registryMaps", tf.RegistryMaps)
+	if err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	for i := range tf.Templates {
 		t := &tf.Templates[i]
@@ -184,8 +207,19 @@ func Load() (*Config, error) {
 		if err := validateEnv("template "+t.Name+" env", t.Env); err != nil {
 			return nil, err
 		}
+		if err := validateBuildEnv("template "+t.Name+" buildEnv", t.BuildEnv); err != nil {
+			return nil, err
+		}
+		maps, err := normalizeRegistryMaps("template "+t.Name+" registryMaps", t.RegistryMaps)
+		if err != nil {
+			return nil, err
+		}
+		t.RegistryMaps = maps
 	}
 	c.JobEnv = tf.Env
+	c.BuildEnv = tf.BuildEnv
+	c.RegistryMaps = topMaps
+	c.SkipDefaultRegistryFallback = tf.SkipDefaultRegistryFallback
 	c.Templates = tf.Templates
 	return c, nil
 }
@@ -200,6 +234,70 @@ func validateEnv(where string, env map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// validateBuildEnv rejects variables that would change how the build itself
+// runs (shell/PATH/linker) or collide with controller-internal plumbing. Package
+// manager endpoints are the intended content.
+func validateBuildEnv(where string, env map[string]string) error {
+	if err := validateEnv(where, env); err != nil {
+		return err
+	}
+	denied := map[string]bool{
+		"PATH": true, "HOME": true, "SHELL": true, "IFS": true, "ENV": true,
+		"BASH_ENV": true, "CDPATH": true, "GLOBIGNORE": true, "PS4": true,
+		"PROMPT_COMMAND": true, "LD_PRELOAD": true, "LD_LIBRARY_PATH": true,
+	}
+	for k := range env {
+		if denied[k] {
+			return fmt.Errorf("%s: %q cannot be injected into image builds", where, k)
+		}
+		if strings.HasPrefix(k, "GRC_") {
+			return fmt.Errorf("%s: %q is reserved for controller plumbing", where, k)
+		}
+	}
+	return nil
+}
+
+// normalizeRegistryMaps validates and canonicalizes kaniko registry mappings.
+// Docker Hub is stored as index.docker.io, matching go-containerregistry's
+// normalization; a target without a scheme defaults to https.
+func normalizeRegistryMaps(where string, in map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(in))
+	for rawKey, rawValue := range in {
+		key := strings.ToLower(strings.TrimSpace(rawKey))
+		if key == "docker.io" {
+			key = "index.docker.io"
+		}
+		if key == "" || key == "*" || strings.Contains(key, "://") ||
+			strings.ContainsAny(key, " \t\r\n/") {
+			return nil, fmt.Errorf("%s: invalid original registry %q", where, rawKey)
+		}
+		u, err := url.Parse("//" + key)
+		if err != nil || u.Host == "" || u.Path != "" || u.User != nil {
+			return nil, fmt.Errorf("%s: invalid original registry %q", where, rawKey)
+		}
+
+		value := strings.TrimSpace(rawValue)
+		if value == "" || strings.ContainsAny(value, " \t\r\n;=") {
+			return nil, fmt.Errorf("%s: registry %q has an invalid target", where, rawKey)
+		}
+		if !strings.Contains(value, "://") {
+			value = "https://" + value
+		}
+		target, err := url.Parse(value)
+		if err != nil || target.Host == "" || target.User != nil ||
+			target.RawQuery != "" || target.Fragment != "" ||
+			(target.Scheme != "http" && target.Scheme != "https") {
+			return nil, fmt.Errorf("%s: registry %q has an invalid target %q", where, rawKey, rawValue)
+		}
+		value = strings.TrimRight(value, "/")
+		if existing, ok := out[key]; ok && existing != value {
+			return nil, fmt.Errorf("%s: registry %q is defined more than once", where, key)
+		}
+		out[key] = value
+	}
+	return out, nil
 }
 
 func validateResources(template string, r ResourceLimits) error {
@@ -251,6 +349,30 @@ func (c *Config) TemplateEnv(t Template) map[string]string {
 		out[k] = v
 	}
 	for k, v := range t.Env {
+		out[k] = v
+	}
+	return out
+}
+
+// TemplateBuildEnv merges the controller defaults with a template's build env.
+func (c *Config) TemplateBuildEnv(t Template) map[string]string {
+	out := make(map[string]string, len(c.BuildEnv)+len(t.BuildEnv))
+	for k, v := range c.BuildEnv {
+		out[k] = v
+	}
+	for k, v := range t.BuildEnv {
+		out[k] = v
+	}
+	return out
+}
+
+// TemplateRegistryMaps merges the controller defaults with a template's maps.
+func (c *Config) TemplateRegistryMaps(t Template) map[string]string {
+	out := make(map[string]string, len(c.RegistryMaps)+len(t.RegistryMaps))
+	for k, v := range c.RegistryMaps {
+		out[k] = v
+	}
+	for k, v := range t.RegistryMaps {
 		out[k] = v
 	}
 	return out

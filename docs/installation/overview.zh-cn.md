@@ -40,6 +40,16 @@ Secret: 与 controller 的 WEBHOOK_SECRET 一致
 
 `workflow_job` 事件是 controller 的即时触发器；即使漏投，30s 的定时 reconcile 也会补上。
 
+使用 Sealos 模板时，`webhook_secret` 由模板自动生成（`defaults.webhook_secret`），不需要手工生成。
+部署后从 controller Deployment 的 env 读出，填入 Gitea system webhook：
+
+```bash
+kubectl -n <namespace> get deploy <app-name> \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WEBHOOK_SECRET")].value}'
+```
+
+使用 `deploy/all.yaml` 裸清单时，仍需手工填写 `WEBHOOK_SECRET`。
+
 ## 2. Kubernetes 侧
 
 ```bash
@@ -60,13 +70,19 @@ kubectl apply -f deploy/all.yaml
 `templates.yaml` 的结构：
 
 ```yaml
-env:
+buildEnv:
   PIP_INDEX_URL: http://kkrepo.<ns>.svc:8080/repository/pypi-group/simple
   PIP_TRUSTED_HOST: kkrepo.<ns>.svc
   NPM_CONFIG_REGISTRY: http://kkrepo.<ns>.svc:8080/repository/npm-group/
   YARN_REGISTRY: http://kkrepo.<ns>.svc:8080/repository/npm-group/
   YARN_NPM_REGISTRY_SERVER: http://kkrepo.<ns>.svc:8080/repository/npm-group/
   GOPROXY: http://kkrepo.<ns>.svc:8080/repository/go-group/
+
+registryMaps:
+  # Docker Hub uses --registry-mirror; other registries use --registry-map.
+  docker.io: https://docker.<domain>
+  ghcr.io: https://docker.<domain>
+skipDefaultRegistryFallback: false
 
 templates:
   - name: standard
@@ -81,8 +97,13 @@ templates:
 
 ```
 
-- `env` 是所有模板的默认值；模板自己的 `env` 覆盖同名 key。
-- 包管理器源是普通 env，不是 Secret。
+- `env` 只导出到 runner；`buildEnv` 同时导出到 runner 并注入每个 Dockerfile 阶段。构建注入只写
+  `ARG`，值通过 `--build-arg` 传入，因此不会以 `ENV` 形式留在最终镜像里。
+- `registryMaps` 只影响 kaniko 拉基础镜像。目标可以是 kkrepo Docker group 的专用地址，也可以带
+  路径前缀；kaniko 没有通配映射，每新增一个上游 registry 需要加一行。
+- `docker.io` 会被规范成 `index.docker.io`，配置里写 `docker.io` 即可。HTTP 目标会自动追加
+  `--insecure-registry`；HTTPS 自签由 `EXECUTOR_CA_PATH` 注入的 CA 覆盖。
+- `skipDefaultRegistryFallback: true` 时，mapped registry 没有镜像就直接失败，不静默回源公网。
 - 每个 runner Pod 都带 kaniko sidecar；标准 workflow 的 `docker build` 原样可用。
 - `maxConcurrent` 是该模板的并发上限，超出的 job 留在 Gitea waiting 队列。
 
@@ -112,7 +133,10 @@ jobs:
 - Gitea 侧：admin Actions API token，作用域与 controller 的站点级身份一致。
 - Kubernetes：允许 controller 创建/删除 Pod 和 Lease。
 - 如果使用自签 Gitea / kkrepo：把 CA 挂到 controller，配置 `EXECUTOR_CA_PATH`；controller 自己
-  （Gitea API/注册）和每个 runner Pod 都使用它。
+  （Gitea API/注册）、runner 和 kaniko 都使用它。kaniko 拉基础镜像走的就是这份 CA；Dockerfile
+  内 `RUN` 的 HTTPS 包代理不继承 kaniko 进程环境，包代理建议用集群内 HTTP Service。
+- 可选：`buildEnv` 统一定义 pip/npm/yarn/pnpm/go 的包代理，同时作用于 `run:` 和 Dockerfile 构建。
+- 可选：`registryMaps` 把基础镜像拉取重定向到 kkrepo Docker group；每个上游 registry 一条。
 - 如果 runner 镜像在私有仓库：提供 `IMAGE_PULL_SECRET`。
 
 ## 6. 升级与回滚

@@ -71,6 +71,134 @@ func TestLoadAndTemplateSelection(t *testing.T) {
 	}
 }
 
+func TestBuildEnvAndRegistryMapsMerge(t *testing.T) {
+	minimalEnv(t)
+	t.Setenv("TEMPLATES_FILE", writeTemplates(t, `
+buildEnv:
+  GOPROXY: http://kkrepo/repository/go-proxy/
+  PIP_INDEX_URL: http://kkrepo/repository/pypi-group/simple
+registryMaps:
+  docker.io: docker.example
+  ghcr.io: https://docker.example/ghcr
+skipDefaultRegistryFallback: true
+templates:
+  - name: standard
+    labels: [self-hosted, ubuntu-latest]
+    image: example/runner:1
+    maxConcurrent: 2
+    buildEnv:
+      PIP_INDEX_URL: http://template/repository/pypi/simple
+    registryMaps:
+      quay.io: https://docker.example/quay
+`))
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.SkipDefaultRegistryFallback {
+		t.Fatal("skipDefaultRegistryFallback not loaded")
+	}
+	if got := c.RegistryMaps["index.docker.io"]; got != "https://docker.example" {
+		t.Fatalf("docker.io normalized map = %q", got)
+	}
+	buildEnv := c.TemplateBuildEnv(c.Templates[0])
+	if buildEnv["GOPROXY"] != "http://kkrepo/repository/go-proxy/" {
+		t.Fatalf("buildEnv = %v", buildEnv)
+	}
+	if buildEnv["PIP_INDEX_URL"] != "http://template/repository/pypi/simple" {
+		t.Fatalf("template buildEnv override = %v", buildEnv)
+	}
+	maps := c.TemplateRegistryMaps(c.Templates[0])
+	if maps["index.docker.io"] != "https://docker.example" ||
+		maps["ghcr.io"] != "https://docker.example/ghcr" ||
+		maps["quay.io"] != "https://docker.example/quay" {
+		t.Fatalf("registry maps = %v", maps)
+	}
+}
+
+func TestLoadRejectsDangerousOrInvalidBuildConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "path in buildEnv",
+			body: `
+buildEnv:
+  PATH: /evil
+templates:
+  - name: standard
+    labels: [self-hosted]
+    image: example/runner:1
+    maxConcurrent: 1
+`,
+			want: "cannot be injected",
+		},
+		{
+			name: "grc reserved",
+			body: `
+buildEnv:
+  GRC_SHARED: /tmp
+templates:
+  - name: standard
+    labels: [self-hosted]
+    image: example/runner:1
+    maxConcurrent: 1
+`,
+			want: "reserved",
+		},
+		{
+			name: "invalid registry target",
+			body: `
+registryMaps:
+  ghcr.io: "https://docker.example?x=1"
+templates:
+  - name: standard
+    labels: [self-hosted]
+    image: example/runner:1
+    maxConcurrent: 1
+`,
+			want: "invalid target",
+		},
+		{
+			name: "wildcard registry",
+			body: `
+registryMaps:
+  "*": https://docker.example
+templates:
+  - name: standard
+    labels: [self-hosted]
+    image: example/runner:1
+    maxConcurrent: 1
+`,
+			want: "invalid original registry",
+		},
+		{
+			name: "semicolon in registry target",
+			body: `
+registryMaps:
+  ghcr.io: "https://docker.example/a;b"
+templates:
+  - name: standard
+    labels: [self-hosted]
+    image: example/runner:1
+    maxConcurrent: 1
+`,
+			want: "invalid target",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			minimalEnv(t)
+			t.Setenv("TEMPLATES_FILE", writeTemplates(t, tc.body))
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsIncompleteTemplates(t *testing.T) {
 	minimalEnv(t)
 	t.Setenv("TEMPLATES_FILE", writeTemplates(t, `

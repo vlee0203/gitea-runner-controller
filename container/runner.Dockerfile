@@ -21,9 +21,22 @@ RUN go mod init crane \
     && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
        go build -trimpath -ldflags "-s -w" -o /out/crane github.com/google/go-containerregistry/cmd/crane
 
+# Dockerfile injector: inserts package-proxy ARG declarations before the shim
+# hands a build to kaniko. Built on the builder platform and cross-compiled.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS dockerfile-inject
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/dockerfile-inject ./cmd/dockerfile-inject
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w" -o /out/dockerfile-inject ./cmd/dockerfile-inject
+
 FROM docker.gitea.com/runner-images:ubuntu-latest
 COPY --from=runner /usr/local/bin/gitea-runner /usr/local/bin/gitea-runner
 COPY --from=crane /out/crane /usr/local/bin/crane
+COPY --from=dockerfile-inject /out/dockerfile-inject /usr/local/bin/dockerfile-inject
 
 # `docker` 替身：把标准 docker 命令转给同一个 Pod 里的 kaniko 容器（见 container/docker.sh）。
 # 它自己不构建 —— 本平台没有任何 docker daemon，kaniko 又必须作为它自己的镜像运行。

@@ -60,6 +60,9 @@ func TestStartWritesRegistrationFileAndPod(t *testing.T) {
 	if env["HOME"] != "/data" || env["PIP_INDEX_URL"] != "https://kkrepo/pypi" {
 		t.Fatalf("env = %v", env)
 	}
+	if env["GRC_BUILD_ENV_KEYS"] != "" || env["GRC_REGISTRY_MAPS_B64"] != "" {
+		t.Fatalf("empty build config should not set controller env: %v", env)
+	}
 	raw, err := base64.StdEncoding.DecodeString(env["GRC_RUNNER_FILE"])
 	if err != nil {
 		t.Fatalf("decode GRC_RUNNER_FILE: %v", err)
@@ -122,16 +125,93 @@ func TestBuildTemplateAddsKanikoSidecarAndSharedContext(t *testing.T) {
 	}
 }
 
+func TestBuildEnvAndRegistryMaps(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	m := New(cs, "ci", nil)
+	s := testSpec()
+	s.KanikoImage = "kaniko:test"
+	s.BuildEnv = map[string]string{
+		"GOPROXY":             "http://kkrepo/go",
+		"PIP_INDEX_URL":       "http://kkrepo/pypi",
+		"NPM_CONFIG_REGISTRY": "http://kkrepo/npm",
+	}
+	s.RegistryMaps = map[string]string{
+		"index.docker.io": "https://docker.example",
+		"ghcr.io":         "https://docker.example",
+	}
+	s.SkipDefaultRegistryFallback = true
+	if err := m.Start(context.Background(), s); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods("ci").Get(context.Background(), s.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner, kaniko *corev1.Container
+	for i := range pod.Spec.Containers {
+		switch pod.Spec.Containers[i].Name {
+		case RunnerContainerName:
+			runner = &pod.Spec.Containers[i]
+		case "kaniko":
+			kaniko = &pod.Spec.Containers[i]
+		}
+	}
+	if runner == nil || kaniko == nil {
+		t.Fatalf("containers = %+v", pod.Spec.Containers)
+	}
+	env := map[string]string{}
+	for _, e := range runner.Env {
+		env[e.Name] = e.Value
+	}
+	// JobEnv (template env) wins over the shared buildEnv default, and the shim
+	// reads this effective value when it builds the --build-arg.
+	if env["GOPROXY"] != "http://kkrepo/go" || env["PIP_INDEX_URL"] != "https://kkrepo/pypi" {
+		t.Fatalf("build env not exported: %v", env)
+	}
+	if env["GRC_BUILD_ENV_KEYS"] != "GOPROXY,NPM_CONFIG_REGISTRY,PIP_INDEX_URL" {
+		t.Fatalf("GRC_BUILD_ENV_KEYS = %q", env["GRC_BUILD_ENV_KEYS"])
+	}
+	raw, err := base64.StdEncoding.DecodeString(env["GRC_REGISTRY_MAPS_B64"])
+	if err != nil {
+		t.Fatalf("decode registry maps: %v", err)
+	}
+	wantMaps := "ghcr.io=https://docker.example\nindex.docker.io=https://docker.example\n"
+	if string(raw) != wantMaps {
+		t.Fatalf("registry maps = %q, want %q", raw, wantMaps)
+	}
+	if env["GRC_REGISTRY_MAP_SKIP_FALLBACK"] != "1" {
+		t.Fatalf("skip fallback = %q", env["GRC_REGISTRY_MAP_SKIP_FALLBACK"])
+	}
+	if hasEnv(kaniko, "GRC_BUILD_ENV_KEYS", env["GRC_BUILD_ENV_KEYS"]) {
+		t.Fatal("kaniko sidecar must not receive build env keys")
+	}
+}
+
 func TestCAPassedThroughEnvAndBundle(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	m := New(cs, "ci", []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"))
 	s := testSpec()
+	s.KanikoImage = "kaniko:test"
 	if err := m.Start(context.Background(), s); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	pod, _ := cs.CoreV1().Pods("ci").Get(context.Background(), s.Name, metav1.GetOptions{})
-	if !hasEnv(&pod.Spec.Containers[0], "SSL_CERT_FILE", "/etc/grc-ca/ca-certificates.crt") {
-		t.Fatalf("SSL_CERT_FILE missing: %v", pod.Spec.Containers[0].Env)
+	for _, name := range []string{RunnerContainerName, "kaniko"} {
+		var c *corev1.Container
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == name {
+				c = &pod.Spec.Containers[i]
+			}
+		}
+		if c == nil {
+			t.Fatalf("container %s missing", name)
+		}
+		if !hasEnv(c, "SSL_CERT_FILE", "/etc/grc-ca/ca-certificates.crt") {
+			t.Fatalf("SSL_CERT_FILE missing on %s: %v", name, c.Env)
+		}
+		if !hasMount(c, caBundleVol) {
+			t.Fatalf("CA bundle mount missing on %s: %v", name, c.VolumeMounts)
+		}
 	}
 	var caInit *corev1.Container
 	for i := range pod.Spec.InitContainers {

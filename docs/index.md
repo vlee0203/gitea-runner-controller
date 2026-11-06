@@ -18,7 +18,7 @@ Gitea queued jobs ──list/webhook──▶ controller ──create──▶ r
 | --- | --- | --- |
 | [安装](installation/overview.zh-cn.md) | Gitea API token、system webhook、模板、部署与验证 | 首次部署 |
 | [安装 · 内网部署](installation/air-gapped.zh-cn.md) | 不能出网的集群：镜像/action 怎么搬进去 | 内网交付 |
-| [用法](usage/overview.zh-cn.md) | 模板/labels、默认 env、构建镜像 | workflow 作者 |
+| [用法](usage/overview.zh-cn.md) | 模板/labels、包代理/镜像代理、构建镜像 | workflow 作者 |
 | [用法 · 构建镜像](usage/image-building.zh-cn.md) | `docker login/build/push`、kaniko、crane | workflow 作者 |
 | [进阶 · 架构](advanced/architecture.zh-cn.md) | reconcile 循环、runner 生命周期、并发 | 想改代码 / 排查深层问题 |
 | [进阶 · 安全](advanced/security.zh-cn.md) | 站点级 API token、per-runner 身份、边界 | 安全评审 |

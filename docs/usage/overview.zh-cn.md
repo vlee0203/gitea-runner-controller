@@ -37,12 +37,12 @@ templates:
     timeout: 1h
 ```
 
-## 默认 env
+## 包代理与镜像代理
 
-模板和顶层 `env` 会注入 runner 容器和 kaniko 容器：
+`buildEnv` 同时导出到 runner（`run:` 步骤）并注入 Dockerfile 的每个构建阶段：
 
 ```yaml
-env:
+buildEnv:
   PIP_INDEX_URL: http://kkrepo.<ns>.svc:8080/repository/pypi-group/simple
   PIP_TRUSTED_HOST: kkrepo.<ns>.svc
   NPM_CONFIG_REGISTRY: http://kkrepo.<ns>.svc:8080/repository/npm-group/
@@ -51,9 +51,27 @@ env:
   GOPROXY: http://kkrepo.<ns>.svc:8080/repository/go-group/
 ```
 
-这些是**默认值**，workflow 里的 `env:` 可以覆盖。它们不是 Secret，直接写在模板 ConfigMap 里。
+构建注入只写 `ARG`，值通过 `--build-arg` 传入；不会以 `ENV` 形式留在最终镜像里。用户
+Dockerfile 后面自己写的 `ENV` 或显式 `--build-arg` 优先。workflow 的 `env:` 覆盖也会被 shim
+读取，因此构建和 `run:` 步骤使用同一份生效值。
 
-kkrepo 用集群内 Service 地址时，`.svc` 已在 `NO_PROXY` 中，不会走平台 HTTP 代理。
+`registryMaps` 让 kaniko 的基础镜像拉取走 kkrepo：
+
+```yaml
+registryMaps:
+  docker.io: https://docker.<domain>
+  ghcr.io: https://docker.<domain>
+```
+
+- Docker Hub 自动用 `--registry-mirror`（内部 key 是 `index.docker.io`），其它 registry 用
+  `--registry-map`；目标可以带 path 前缀。
+- kaniko 没有通配映射，每新增一个上游 registry 需要加一行。
+- HTTP 目标自动加 `--insecure-registry`；HTTPS 自签由 `EXECUTOR_CA_PATH` 的 CA 覆盖。
+- kkrepo 用集群内 Service 地址时，`.svc` 已在 `NO_PROXY` 中，不会走平台 HTTP 代理。
+- 这些值不是 Secret，直接写在模板 ConfigMap 里；不要把带用户名密码的 URL 放进来。
+- 如果目标是 kkrepo Docker group：group 按成员顺序解析，且只有一个路径命名空间；两个上游存在同名
+  image 时由成员顺序决定。需要严格区分来源时，把该上游单独映射到它的 proxy 地址，不要经过 group。
+- Cleanup policy 要选具体的 proxy 仓库，不能选 group；group 不拥有内容。
 
 ## 构建镜像
 

@@ -47,17 +47,31 @@ kind: ConfigMap
 metadata:
   name: gitea-runner-controller-templates
 data:
-  # jobEnv is merged into every template; a template may override a key.
-  # These are non-sensitive package-manager defaults. Point them at kkrepo's
-  # in-cluster Service; the Kubernetes .svc suffix is already in NO_PROXY.
+  # env is merged into every template and exported to the runner only.
+  # buildEnv is exported to the runner AND injected into image builds as ARG
+  # declarations (values travel as --build-arg), so pip/npm/go inside Dockerfile
+  # RUN steps use the same kkrepo proxies. It is intentionally not written as
+  # ENV, so the addresses do not persist in the final image config.
+  # registryMaps redirects kaniko base-image pulls. Docker Hub uses
+  # --registry-mirror; other registries use --registry-map. The target may
+  # include a path prefix and may be the kkrepo docker group address. Add one
+  # entry per upstream registry; kaniko has no wildcard mapping.
   templates.yaml: |
-    env:
+    buildEnv:
       PIP_INDEX_URL: http://kkrepo.example.com/repository/pypi-group/simple
       PIP_TRUSTED_HOST: kkrepo.example.com
       NPM_CONFIG_REGISTRY: http://kkrepo.example.com/repository/npm-group/
       YARN_REGISTRY: http://kkrepo.example.com/repository/npm-group/
       YARN_NPM_REGISTRY_SERVER: http://kkrepo.example.com/repository/npm-group/
       GOPROXY: http://kkrepo.example.com/repository/go-group/
+
+    registryMaps:
+      docker.io: https://docker.example.com
+      ghcr.io: https://docker.example.com
+
+    # Optional: fail instead of pulling directly from an upstream registry when
+    # the mapped kkrepo target does not have the image.
+    skipDefaultRegistryFallback: false
 
     templates:
       - name: standard
